@@ -153,12 +153,10 @@ func TestBuildLine(t *testing.T) {
 	}
 }
 
-// editableStatus is the gate for PATCH /subscriptions/:id. It documents the
-// CURRENT behavior: only CLOSED is outright rejected. Note for the module
-// owner: docs/API.md promises "fields editable only in DRAFT/QUOTATION", but
-// this gate also lets CONFIRMED, ACTIVE and PAUSED through — the line
-// endpoints are stricter (DRAFT/QUOTATION only, enforced inline). This test
-// pins what the code does today so any tightening is a deliberate change.
+// editableStatus is the gate for PATCH /subscriptions/:id. It enforces the
+// contract documented in docs/API.md: only DRAFT and QUOTATION subscriptions
+// are editable; every other state is frozen so the audit trail stays
+// consistent with the lifecycle.
 func TestEditableStatus(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -167,10 +165,10 @@ func TestEditableStatus(t *testing.T) {
 	}{
 		{"DRAFT is editable", StatusDraft, true},
 		{"QUOTATION is editable", StatusQuotation, true},
-		{"CONFIRMED is currently editable", StatusConfirmed, true},
-		{"ACTIVE is currently editable", StatusActive, true},
-		{"PAUSED is currently editable", StatusPaused, true},
-		{"CLOSED is never editable", StatusClosed, false},
+		{"CONFIRMED is frozen", StatusConfirmed, false},
+		{"ACTIVE is frozen", StatusActive, false},
+		{"PAUSED is frozen", StatusPaused, false},
+		{"CLOSED is frozen", StatusClosed, false},
 	}
 
 	for _, tt := range tests {
@@ -184,8 +182,8 @@ func TestEditableStatus(t *testing.T) {
 			}
 			if !tt.want {
 				msg := err.Error()
-				if !strings.Contains(msg, "closed") {
-					t.Fatalf("expected a 'closed' conflict message, got %q", msg)
+				if !strings.Contains(msg, "DRAFT or QUOTATION") {
+					t.Fatalf("expected a DRAFT/QUOTATION conflict message, got %q", msg)
 				}
 			}
 		})
