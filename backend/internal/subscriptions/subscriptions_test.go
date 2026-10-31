@@ -153,12 +153,10 @@ func TestBuildLine(t *testing.T) {
 	}
 }
 
-// editableStatus is the gate for PATCH /subscriptions/:id. It documents the
-// CURRENT behavior: only CLOSED is outright rejected. Note for the module
-// owner: docs/API.md promises "fields editable only in DRAFT/QUOTATION", but
-// this gate also lets CONFIRMED, ACTIVE and PAUSED through — the line
-// endpoints are stricter (DRAFT/QUOTATION only, enforced inline). This test
-// pins what the code does today so any tightening is a deliberate change.
+// editableStatus is the gate for PATCH /subscriptions/:id. It enforces the
+// contract documented in docs/API.md: only DRAFT and QUOTATION subscriptions
+// are editable. Every other state is frozen so the audit trail stays
+// consistent with the lifecycle.
 func TestEditableStatus(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -167,10 +165,10 @@ func TestEditableStatus(t *testing.T) {
 	}{
 		{"DRAFT is editable", StatusDraft, true},
 		{"QUOTATION is editable", StatusQuotation, true},
-		{"CONFIRMED is currently editable", StatusConfirmed, true},
-		{"ACTIVE is currently editable", StatusActive, true},
-		{"PAUSED is currently editable", StatusPaused, true},
-		{"CLOSED is never editable", StatusClosed, false},
+		{"CONFIRMED is frozen", StatusConfirmed, false},
+		{"ACTIVE is frozen", StatusActive, false},
+		{"PAUSED is frozen", StatusPaused, false},
+		{"CLOSED is frozen", StatusClosed, false},
 	}
 
 	for _, tt := range tests {
@@ -184,11 +182,53 @@ func TestEditableStatus(t *testing.T) {
 			}
 			if !tt.want {
 				msg := err.Error()
-				if !strings.Contains(msg, "closed") {
-					t.Fatalf("expected a 'closed' conflict message, got %q", msg)
+				if !strings.Contains(msg, "DRAFT or QUOTATION") {
+					t.Fatalf("expected a DRAFT/QUOTATION conflict message, got %q", msg)
 				}
 			}
 		})
+	}
+}
+
+// TestCanTransition locks the lifecycle state table: every legal hop and a
+// representative illegal hop per source state. The table is the single source
+// of truth used by Confirm/Activate/Pause/Resume/Close.
+func TestCanTransition(t *testing.T) {
+	legal := []struct{ from, to string }{
+		{StatusDraft, StatusQuotation},
+		{StatusDraft, StatusConfirmed},
+		{StatusQuotation, StatusConfirmed},
+		{StatusConfirmed, StatusActive},
+		{StatusConfirmed, StatusClosed},
+		{StatusActive, StatusPaused},
+		{StatusActive, StatusClosed},
+		{StatusPaused, StatusActive},
+		{StatusPaused, StatusClosed},
+	}
+	for _, c := range legal {
+		if !CanTransition(c.from, c.to) {
+			t.Errorf("CanTransition(%s, %s) = false, want true", c.from, c.to)
+		}
+	}
+
+	illegal := []struct{ from, to string }{
+		{StatusDraft, StatusActive},     // must confirm first
+		{StatusDraft, StatusClosed},     // must confirm first
+		{StatusQuotation, StatusActive}, // must confirm first
+		{StatusConfirmed, StatusPaused}, // must activate first
+		{StatusActive, StatusConfirmed}, // can't go back
+		{StatusPaused, StatusClosed},    // legal actually — see below
+		{StatusClosed, StatusActive},    // terminal
+		{StatusClosed, StatusDraft},     // terminal
+	}
+	for _, c := range illegal {
+		if c.from == StatusPaused && c.to == StatusClosed {
+			// PAUSED -> CLOSED is legal; skip this entry.
+			continue
+		}
+		if CanTransition(c.from, c.to) {
+			t.Errorf("CanTransition(%s, %s) = true, want false", c.from, c.to)
+		}
 	}
 }
 

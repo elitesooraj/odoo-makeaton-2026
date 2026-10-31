@@ -1,19 +1,3 @@
-// Package invoices owns invoice documents and their financial math.
-//
-// Rules the rest of the codebase relies on:
-//   - Invoices snapshot every value they need: line description, unit price and
-//     tax rate. Rendering an old invoice never joins live catalog prices.
-//   - gross(line)  = unit_price_cents * quantity
-//   - line_total   = gross - allocated share of the discount rule
-//   - tax per line = exclusive: money.Percent(line_total, rate_bp), added on top
-//     inclusive: money.IncludedTax(line_total, rate_bp), carved
-//     out of the payable amount, never added on top
-//   - subtotal     = sum of gross
-//   - discount     = sum of allocated discount
-//   - total        = payable = sum(line_total) + sum(exclusive taxes)
-//   - balance      = total minus recorded payments, never below zero
-//   - overdue      = derived at read time (due_date < today, balance > 0,
-//     status CONFIRMED); it is not a stored status
 package invoices
 
 import (
@@ -22,10 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brightloop/subscription-platform/backend/internal/audit"
@@ -40,279 +22,11 @@ import (
 	"github.com/brightloop/subscription-platform/backend/internal/subscriptions"
 )
 
-const (
-	StatusDraft     = "DRAFT"
-	StatusConfirmed = "CONFIRMED"
-	StatusPaid      = "PAID"
-	StatusCancelled = "CANCELLED"
-)
-
-var ErrNotFound = errors.New("invoice not found")
-
-type Invoice struct {
-	ID             uuid.UUID  `json:"id"`
-	Number         string     `json:"number"`
-	CustomerID     uuid.UUID  `json:"customer_id"`
-	SubscriptionID *uuid.UUID `json:"subscription_id"`
-	Status         string     `json:"status"`
-	IssueDate      time.Time  `json:"issue_date"`
-	DueDate        time.Time  `json:"due_date"`
-	PeriodStart    *time.Time `json:"period_start"`
-	PeriodEnd      *time.Time `json:"period_end"`
-	SubtotalCents  int64      `json:"subtotal_cents"`
-	DiscountCents  int64      `json:"discount_cents"`
-	TaxCents       int64      `json:"tax_cents"`
-	TotalCents     int64      `json:"total_cents"`
-	BalanceCents   int64      `json:"balance_cents"`
-	Notes          *string    `json:"notes"`
-	ConfirmedAt    *time.Time `json:"confirmed_at"`
-	SentAt         *time.Time `json:"sent_at"`
-	PaidAt         *time.Time `json:"paid_at"`
-	CancelledAt    *time.Time `json:"cancelled_at"`
-	CreatedBy      *uuid.UUID `json:"created_by"`
-	Lines          []Line     `json:"lines,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-}
-
-type Line struct {
-	ID             uuid.UUID  `json:"id"`
-	InvoiceID      uuid.UUID  `json:"invoice_id"`
-	ProductID      *uuid.UUID `json:"product_id"`
-	VariantID      *uuid.UUID `json:"variant_id"`
-	Description    string     `json:"description"`
-	Quantity       int        `json:"quantity"`
-	UnitPriceCents int64      `json:"unit_price_cents"`
-	TaxRateBP      int        `json:"tax_rate_bp"`
-	TaxCents       int64      `json:"tax_cents"`
-	DiscountCents  int64      `json:"discount_cents"`
-	LineTotalCents int64      `json:"line_total_cents"`
-	Position       int        `json:"position"`
-}
-
-type Filter struct {
-	CustomerID     *uuid.UUID
-	SubscriptionID *uuid.UUID
-	Status         string
-	Search         string
-	Overdue        bool
-	Page           pagination.Page
-}
-
-type Repository struct{ pool *pgxpool.Pool }
-
-func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: pool} }
-
-const columns = `id, number, customer_id, subscription_id, status, issue_date, due_date,
-	period_start, period_end, subtotal_cents, discount_cents, tax_cents, total_cents,
-	balance_cents, notes, confirmed_at, sent_at, paid_at, cancelled_at, created_by,
-	created_at, updated_at`
-
-const lineColumns = `id, invoice_id, product_id, variant_id, description, quantity,
-	unit_price_cents, tax_rate_bp, tax_cents, discount_cents, line_total_cents, position`
-
-func (r *Repository) Insert(ctx context.Context, q db.Querier, i *Invoice) error {
-	_, err := q.Exec(ctx, `INSERT INTO invoices
-		(id, number, customer_id, subscription_id, status, issue_date, due_date,
-		 period_start, period_end, subtotal_cents, discount_cents, tax_cents,
-		 total_cents, balance_cents, notes, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-		i.ID, i.Number, i.CustomerID, id.UUIDArg(i.SubscriptionID), i.Status,
-		id.DateArg(&i.IssueDate), id.DateArg(&i.DueDate), id.DateArg(i.PeriodStart),
-		id.DateArg(i.PeriodEnd), i.SubtotalCents, i.DiscountCents, i.TaxCents,
-		i.TotalCents, i.BalanceCents, id.StringArg(i.Notes), id.UUIDArg(i.CreatedBy))
-	return err
-}
-
-func (r *Repository) Get(ctx context.Context, q db.Querier, invoiceID uuid.UUID) (*Invoice, error) {
-	return scan(q.QueryRow(ctx, `SELECT `+columns+` FROM invoices WHERE id = $1`, invoiceID))
-}
-
-func (r *Repository) List(ctx context.Context, f Filter) ([]Invoice, int, error) {
-	where := `WHERE ($1::uuid IS NULL OR customer_id = $1)
-		AND ($2::uuid IS NULL OR subscription_id = $2)
-		AND ($3 = '' OR status = $3)
-		AND ($4 = '' OR number LIKE '%' || $4 || '%')
-		AND (NOT $5 OR (
-			status = 'CONFIRMED' AND balance_cents > 0 AND due_date < current_date))`
-
-	var total int
-	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM invoices `+where,
-		id.UUIDArg(f.CustomerID), id.UUIDArg(f.SubscriptionID), f.Status,
-		strings.TrimSpace(f.Search), f.Overdue).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-	rows, err := r.pool.Query(ctx, `SELECT `+columns+` FROM invoices `+where+`
-		ORDER BY issue_date DESC, created_at DESC, id LIMIT $6 OFFSET $7`,
-		id.UUIDArg(f.CustomerID), id.UUIDArg(f.SubscriptionID), f.Status,
-		strings.TrimSpace(f.Search), f.Overdue, f.Page.PerPage, f.Page.Offset())
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	out := make([]Invoice, 0)
-	for rows.Next() {
-		i, err := scan(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, *i)
-	}
-	return out, total, rows.Err()
-}
-
-func (r *Repository) Lines(ctx context.Context, q db.Querier, invoiceID uuid.UUID) ([]Line, error) {
-	rows, err := q.Query(ctx, `SELECT `+lineColumns+` FROM invoice_lines
-		WHERE invoice_id = $1 ORDER BY position, created_at`, invoiceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := make([]Line, 0)
-	for rows.Next() {
-		l, err := scanLine(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *l)
-	}
-	return out, rows.Err()
-}
-
-func (r *Repository) InsertLine(ctx context.Context, q db.Querier, l *Line) error {
-	_, err := q.Exec(ctx, `INSERT INTO invoice_lines
-		(id, invoice_id, product_id, variant_id, description, quantity,
-		 unit_price_cents, tax_rate_bp, tax_cents, discount_cents, line_total_cents, position)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		l.ID, l.InvoiceID, id.UUIDArg(l.ProductID), id.UUIDArg(l.VariantID), l.Description,
-		l.Quantity, l.UnitPriceCents, l.TaxRateBP, l.TaxCents, l.DiscountCents,
-		l.LineTotalCents, l.Position)
-	return err
-}
-
-func (r *Repository) UpdateLineAmounts(ctx context.Context, q db.Querier, l *Line) error {
-	_, err := q.Exec(ctx, `UPDATE invoice_lines SET tax_cents = $2, discount_cents = $3,
-		line_total_cents = $4 WHERE id = $1`, l.ID, l.TaxCents, l.DiscountCents, l.LineTotalCents)
-	return err
-}
-
-// ReplaceLines deletes and rewrites the lines of a DRAFT invoice.
-func (r *Repository) ReplaceLines(ctx context.Context, q db.Querier, invoiceID uuid.UUID) error {
-	_, err := q.Exec(ctx, `DELETE FROM invoice_lines WHERE invoice_id = $1`, invoiceID)
-	return err
-}
-
-func (r *Repository) UpdateDraft(ctx context.Context, q db.Querier, i *Invoice) error {
-	tag, err := q.Exec(ctx, `UPDATE invoices SET due_date = $2, notes = $3,
-		period_start = $4, period_end = $5
-		WHERE id = $1 AND status = 'DRAFT'`,
-		i.ID, id.DateArg(&i.DueDate), id.StringArg(i.Notes),
-		id.DateArg(i.PeriodStart), id.DateArg(i.PeriodEnd))
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("invoice is not a draft")
-	}
-	return nil
-}
-
-func (r *Repository) UpdateTotals(ctx context.Context, q db.Querier, invoiceID uuid.UUID, subtotal, discount, tax, total, balance int64) error {
-	_, err := q.Exec(ctx, `UPDATE invoices SET subtotal_cents = $2, discount_cents = $3,
-		tax_cents = $4, total_cents = $5, balance_cents = $6
-		WHERE id = $1 AND status = 'DRAFT'`,
-		invoiceID, subtotal, discount, tax, total, balance)
-	return err
-}
-
-func (r *Repository) SetStatus(ctx context.Context, q db.Querier, invoiceID uuid.UUID, status string, at time.Time) error {
-	var query string
-	switch status {
-	case StatusConfirmed:
-		query = `UPDATE invoices SET status='CONFIRMED', confirmed_at=$2, balance_cents=total_cents
-			WHERE id=$1 AND status='DRAFT' AND total_cents > 0`
-	case StatusPaid:
-		query = `UPDATE invoices SET status='PAID', paid_at=$2 WHERE id=$1 AND status='CONFIRMED'`
-	case StatusCancelled:
-		query = `UPDATE invoices SET status='CANCELLED', cancelled_at=$2 WHERE id=$1 AND status='DRAFT'`
-	default:
-		return errors.New("unsupported status transition")
-	}
-	tag, err := q.Exec(ctx, query, invoiceID, at)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrTransition{to: status}
-	}
-	return nil
-}
-
-// ErrTransition marks an illegal lifecycle move; httpError maps it to 409.
-type ErrTransition struct{ to string }
-
-func (e ErrTransition) Error() string { return "transition to " + e.to + " is not allowed" }
-
-func (r *Repository) CancelConfirmed(ctx context.Context, q db.Querier, invoiceID uuid.UUID, at time.Time) error {
-	// Only an unpaid confirmed invoice may be cancelled.
-	tag, err := q.Exec(ctx, `UPDATE invoices SET status='CANCELLED', cancelled_at=$2
-		WHERE id=$1 AND status='CONFIRMED' AND balance_cents = total_cents`, invoiceID, at)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrTransition{to: StatusCancelled}
-	}
-	return nil
-}
-
-func (r *Repository) MarkSent(ctx context.Context, q db.Querier, invoiceID uuid.UUID, at time.Time) error {
-	tag, err := q.Exec(ctx, `UPDATE invoices SET sent_at = $2 WHERE id = $1 AND status = 'CONFIRMED'`,
-		invoiceID, at)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrTransition{to: "sent"}
-	}
-	return nil
-}
-
-func (r *Repository) ApplyPayment(ctx context.Context, q db.Querier, invoiceID uuid.UUID, amount int64, at time.Time) error {
-	tag, err := q.Exec(ctx, `UPDATE invoices SET balance_cents = balance_cents - $2,
-		status = CASE WHEN balance_cents - $2 = 0 AND status = 'CONFIRMED' THEN 'PAID'
-			WHEN balance_cents - $2 > 0 AND status = 'PAID' THEN 'CONFIRMED' ELSE status END,
-		paid_at = CASE WHEN balance_cents - $2 = 0 AND status = 'CONFIRMED' THEN $3
-			WHEN balance_cents - $2 > 0 AND status = 'PAID' THEN NULL ELSE paid_at END
-		WHERE id = $1 AND status IN ('CONFIRMED','PAID') AND balance_cents >= $2`,
-		invoiceID, amount, at)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrTransition{to: "paid"}
-	}
-	return nil
-}
-
-// TaxDetail is the tax snapshot the service needs when building a line.
-type TaxDetail struct {
-	RateBP      int
-	IsInclusive bool
-}
-
-// TaxLoader resolves tax rules by ID; implemented via the taxes package.
-type TaxLoader interface {
-	Get(ctx context.Context, taxID uuid.UUID) (*TaxDetail, error)
-}
-
 type Service struct {
 	repo      *Repository
 	audit     *audit.Recorder
 	subs      *subscriptions.Service
-	discounts *discounts.Service
+	discounts DiscountLoader
 	taxes     TaxLoader
 }
 
@@ -320,7 +34,7 @@ type Service struct {
 func (s *Service) Repo() *Repository { return s.repo }
 
 func NewService(pool *pgxpool.Pool, recorder *audit.Recorder, subs *subscriptions.Service,
-	disc *discounts.Service, taxes TaxLoader) *Service {
+	disc DiscountLoader, taxes TaxLoader) *Service {
 	return &Service{
 		repo:      NewRepository(pool),
 		audit:     recorder,
@@ -330,40 +44,7 @@ func NewService(pool *pgxpool.Pool, recorder *audit.Recorder, subs *subscription
 	}
 }
 
-type LineInput struct {
-	ProductID      *string `json:"product_id"`
-	VariantID      *string `json:"variant_id"`
-	Description    string  `json:"description"`
-	Quantity       int     `json:"quantity"`
-	UnitPriceCents int64   `json:"unit_price_cents"`
-	TaxID          *string `json:"tax_id"`
-}
-
-type CreateInput struct {
-	CustomerID     string      `json:"customer_id"`
-	SubscriptionID *string     `json:"subscription_id"`
-	IssueDate      *string     `json:"issue_date"`
-	DueDate        *string     `json:"due_date"`
-	PeriodStart    *string     `json:"period_start"`
-	PeriodEnd      *string     `json:"period_end"`
-	DiscountID     *string     `json:"discount_id"`
-	Notes          string      `json:"notes"`
-	Lines          []LineInput `json:"lines"`
-}
-
-type UpdateInput struct {
-	DueDate     *string      `json:"due_date"`
-	Notes       string       `json:"notes"`
-	PeriodStart *string      `json:"period_start"`
-	PeriodEnd   *string      `json:"period_end"`
-	Lines       *[]LineInput `json:"lines"`
-}
-
 // draftLine carries the inclusive/exclusive flag across the finalize step.
-type draftLine struct {
-	Line
-	taxInclusive bool
-}
 
 // Create makes a DRAFT invoice. Provide explicit lines, or a subscription_id to
 // snapshot the subscription's lines — never both.
@@ -671,8 +352,6 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 	totalQuantity := 0
 	for i := range drafts {
 		gross := int64(drafts[i].Quantity) * drafts[i].UnitPriceCents
-		inv2 := gross // keep the value in a local for clarity in allocation
-		_ = inv2
 		subtotal += gross
 		totalQuantity += drafts[i].Quantity
 	}
@@ -710,33 +389,13 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 	}
 
 	// 2) compute line_total = gross - discount and per-line tax
-	taxTotal := int64(0)
-	exclusiveTax := int64(0)
-	for i := range drafts {
-		g := gross(drafts[i])
-		lineTotal := g - drafts[i].DiscountCents
-		if lineTotal < 0 {
-			lineTotal = 0
-		}
-		var tax int64
-		if drafts[i].TaxRateBP > 0 {
-			if drafts[i].taxInclusive {
-				tax = money.IncludedTax(lineTotal, drafts[i].TaxRateBP)
-			} else {
-				tax = money.Percent(lineTotal, drafts[i].TaxRateBP)
-				exclusiveTax += tax
-			}
-		}
-		taxTotal += tax
-		drafts[i].LineTotalCents = lineTotal
-		drafts[i].TaxCents = tax
-	}
+	subtotal, discountTotal, taxTotal, _, total := computeTotals(drafts)
 
 	// 3) publish totals
 	inv.SubtotalCents = subtotal
 	inv.DiscountCents = discountTotal
 	inv.TaxCents = taxTotal
-	inv.TotalCents = sumLineTotals(drafts) + exclusiveTax
+	inv.TotalCents = total
 	inv.BalanceCents = inv.TotalCents
 
 	for i := range drafts {
@@ -759,6 +418,37 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 		}
 	}
 	return nil
+}
+
+// computeTotals is the pure arithmetic core of finalize(): given drafts whose
+// DiscountCents are already allocated, it computes line totals, per-line tax,
+// and the invoice-level aggregates. Extracting it makes the money model
+// testable without a database.
+func computeTotals(drafts []draftLine) (subtotal, discountTotal, taxTotal, exclusiveTax, total int64) {
+	for i := range drafts {
+		g := gross(drafts[i])
+		subtotal += g
+		discountTotal += drafts[i].DiscountCents
+
+		lineTotal := g - drafts[i].DiscountCents
+		if lineTotal < 0 {
+			lineTotal = 0
+		}
+		var tax int64
+		if drafts[i].TaxRateBP > 0 {
+			if drafts[i].taxInclusive {
+				tax = money.IncludedTax(lineTotal, drafts[i].TaxRateBP)
+			} else {
+				tax = money.Percent(lineTotal, drafts[i].TaxRateBP)
+				exclusiveTax += tax
+			}
+		}
+		drafts[i].LineTotalCents = lineTotal
+		drafts[i].TaxCents = tax
+		taxTotal += tax
+	}
+	total = sumLineTotals(drafts) + exclusiveTax
+	return
 }
 
 func gross(d draftLine) int64 { return int64(d.Quantity) * d.UnitPriceCents }
@@ -1040,244 +730,4 @@ func httpError(err error) error {
 		return httpx.Conflict(transition.Error())
 	}
 	return err
-}
-
-// Handlers ---------------------------------------------------------------
-
-type Handler struct{ svc *Service }
-
-func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
-
-func (h *Handler) Create(c *gin.Context) {
-	actor, _ := auth.CurrentActor(c)
-	meta := auditMeta(c)
-	var in CreateInput
-	if err := httpx.BindJSON(c, &in); err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	inv, err := h.svc.Create(c.Request.Context(), actor, meta, in)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.Created(c, inv)
-}
-
-func (h *Handler) List(c *gin.Context) {
-	page := pagination.Parse(c)
-	f := Filter{
-		Status:  strings.ToUpper(strings.TrimSpace(c.Query("status"))),
-		Search:  strings.TrimSpace(c.Query("search")),
-		Overdue: c.Query("overdue") == "true",
-		Page:    page,
-	}
-	if raw := c.Query("customer_id"); raw != "" {
-		if parsed, err := uuid.Parse(raw); err == nil {
-			f.CustomerID = &parsed
-		} else {
-			httpx.Fail(c, httpx.BadRequest("invalid customer_id"))
-			return
-		}
-	}
-	if raw := c.Query("subscription_id"); raw != "" {
-		if parsed, err := uuid.Parse(raw); err == nil {
-			f.SubscriptionID = &parsed
-		} else {
-			httpx.Fail(c, httpx.BadRequest("invalid subscription_id"))
-			return
-		}
-	}
-	items, total, err := h.svc.List(c.Request.Context(), f)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.List(c, items, pagination.Meta(page, total))
-}
-
-func (h *Handler) Get(c *gin.Context) {
-	invID, ok := parseID(c)
-	if !ok {
-		return
-	}
-	inv, err := h.svc.Get(c.Request.Context(), invID)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.OK(c, inv)
-}
-
-func (h *Handler) Update(c *gin.Context) {
-	actor, _ := auth.CurrentActor(c)
-	meta := auditMeta(c)
-	invID, ok := parseID(c)
-	if !ok {
-		return
-	}
-	var in UpdateInput
-	if err := httpx.BindJSON(c, &in); err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	inv, err := h.svc.Update(c.Request.Context(), actor, meta, invID, in)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.OK(c, inv)
-}
-
-func (h *Handler) Confirm(c *gin.Context) {
-	actor, _ := auth.CurrentActor(c)
-	meta := auditMeta(c)
-	invID, ok := parseID(c)
-	if !ok {
-		return
-	}
-	inv, err := h.svc.Confirm(c.Request.Context(), actor, meta, invID)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.OK(c, inv)
-}
-
-func (h *Handler) Cancel(c *gin.Context) {
-	actor, _ := auth.CurrentActor(c)
-	meta := auditMeta(c)
-	invID, ok := parseID(c)
-	if !ok {
-		return
-	}
-	inv, err := h.svc.Cancel(c.Request.Context(), actor, meta, invID)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.OK(c, inv)
-}
-
-func (h *Handler) Send(c *gin.Context) {
-	actor, _ := auth.CurrentActor(c)
-	meta := auditMeta(c)
-	invID, ok := parseID(c)
-	if !ok {
-		return
-	}
-	inv, err := h.svc.Send(c.Request.Context(), actor, meta, invID)
-	if err != nil {
-		httpx.Fail(c, err)
-		return
-	}
-	httpx.OK(c, inv)
-}
-
-func parseID(c *gin.Context) (uuid.UUID, bool) {
-	invID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		httpx.Fail(c, httpx.BadRequest("invalid invoice id"))
-		return uuid.Nil, false
-	}
-	return invID, true
-}
-
-func auditMeta(c *gin.Context) audit.Meta {
-	meta := httpx.ClientMetaFrom(c)
-	return audit.Meta{IP: meta.IP, UserAgent: meta.UserAgent, RequestID: meta.RequestID}
-}
-
-// End handlers -----------------------------------------------------------
-
-func scan(row pgx.Row) (*Invoice, error) {
-	var (
-		i            Invoice
-		issueDate    pgtype.Date
-		dueDate      pgtype.Date
-		subscription pgtype.UUID
-		periodStart  pgtype.Date
-		periodEnd    pgtype.Date
-		notes        pgtype.Text
-		confirmedAt  pgtype.Timestamptz
-		sentAt       pgtype.Timestamptz
-		paidAt       pgtype.Timestamptz
-		cancelledAt  pgtype.Timestamptz
-		createdBy    pgtype.UUID
-	)
-	err := row.Scan(&i.ID, &i.Number, &i.CustomerID, &subscription, &i.Status,
-		&issueDate, &dueDate, &periodStart, &periodEnd, &i.SubtotalCents,
-		&i.DiscountCents, &i.TaxCents, &i.TotalCents, &i.BalanceCents, &notes,
-		&confirmedAt, &sentAt, &paidAt, &cancelledAt, &createdBy,
-		&i.CreatedAt, &i.UpdatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	if subscription.Valid {
-		v := uuid.UUID(subscription.Bytes)
-		i.SubscriptionID = &v
-	}
-	if issueDate.Valid {
-		i.IssueDate = issueDate.Time
-	}
-	if dueDate.Valid {
-		i.DueDate = dueDate.Time
-	}
-	if periodStart.Valid {
-		t := periodStart.Time
-		i.PeriodStart = &t
-	}
-	if periodEnd.Valid {
-		t := periodEnd.Time
-		i.PeriodEnd = &t
-	}
-	if notes.Valid {
-		v := notes.String
-		i.Notes = &v
-	}
-	timestamp := func(ts pgtype.Timestamptz) *time.Time {
-		if !ts.Valid {
-			return nil
-		}
-		v := ts.Time
-		return &v
-	}
-	i.ConfirmedAt = timestamp(confirmedAt)
-	i.SentAt = timestamp(sentAt)
-	i.PaidAt = timestamp(paidAt)
-	i.CancelledAt = timestamp(cancelledAt)
-	if createdBy.Valid {
-		v := uuid.UUID(createdBy.Bytes)
-		i.CreatedBy = &v
-	}
-	return &i, nil
-}
-
-func scanLine(row pgx.Row) (*Line, error) {
-	var (
-		l         Line
-		productID pgtype.UUID
-		variantID pgtype.UUID
-	)
-	err := row.Scan(&l.ID, &l.InvoiceID, &productID, &variantID, &l.Description,
-		&l.Quantity, &l.UnitPriceCents, &l.TaxRateBP, &l.TaxCents, &l.DiscountCents,
-		&l.LineTotalCents, &l.Position)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	if productID.Valid {
-		v := uuid.UUID(productID.Bytes)
-		l.ProductID = &v
-	}
-	if variantID.Valid {
-		v := uuid.UUID(variantID.Bytes)
-		l.VariantID = &v
-	}
-	return &l, nil
 }

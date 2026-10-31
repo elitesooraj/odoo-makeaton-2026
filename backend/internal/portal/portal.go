@@ -73,7 +73,9 @@ func (h *Handler) Me(c *gin.Context) {
 	if !ok {
 		return
 	}
-	pg := pagination.Parse(c)
+	// Counts must reflect the customer's whole history, not just the first
+	// page, so load with a high page size rather than pagination.Parse(c).
+	pg := pagination.Page{Number: 1, PerPage: 1000}
 	openInvoices, invoiceTotal, _ := h.svc.inv.List(c.Request.Context(), invoices.Filter{
 		CustomerID: &cid, Page: pg})
 	openSubs, subTotal, _ := h.svc.subs.List(c.Request.Context(), subscriptions.Filter{

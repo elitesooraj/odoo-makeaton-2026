@@ -377,6 +377,9 @@ func (s *Service) Instantiate(ctx context.Context, actor *auth.Actor, meta audit
 	}
 
 	quoteExpires := time.Now().UTC().AddDate(0, 0, template.ValidityDays)
+	// The subscription's plan is taken from the template's first line. Templates
+	// that mix plans are not supported by this thin implementation; the module
+	// owner can relax this if mixed plans become a requirement.
 	input := subscriptions.CreateInput{
 		CustomerID:       strings.TrimSpace(in.CustomerID),
 		PlanID:           template.Lines[0].PlanID.String(),
