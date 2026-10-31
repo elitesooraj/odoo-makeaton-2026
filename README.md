@@ -57,7 +57,22 @@ curl -i -c cookies.txt -X POST http://localhost:8080/api/v1/auth/login \
 curl -b cookies.txt http://localhost:8080/api/v1/auth/me
 ```
 
-## Documentation
+## Testing
+
+Two tiers, matching the two commands:
+
+- `make test` — fast, no database. `go vet` plus the unit tests in
+  `backend/internal/...` (money math, invoice model, line validation, route
+  contract). Every PR must pass this.
+- `make test-integration` — spins a disposable Postgres (tmpfs), runs the
+  migrations, and executes the flow tests in `backend/tests/integration/`
+  against the real router: subscription lifecycle, invoice + payment, billing
+  run idempotency, quotation templates, portal scoping, reports, and the
+  error-envelope contract. Set `TEST_DATABASE_URL` to point at your own
+  database instead (e.g. the local pgcheck instance) to skip the container.
+
+The integration tests are DB-gated: without `TEST_DATABASE_URL` they skip
+with an explanation, so `go test ./...` and `make test` stay dependency-free.
 
 - [`docs/problem-statement.md`](docs/problem-statement.md) — requirements,
   decisions taken, and unresolved conflicts.
@@ -70,24 +85,7 @@ curl -b cookies.txt http://localhost:8080/api/v1/auth/me
   backups and the hardening checklist.
 - [`docs/adr/`](docs/adr/) — architecture decisions.
 
-## Testing
-
-Two tiers, both run inside the Compose build image so the host needs only Docker:
-
-```bash
-make test              # Tier 1: go vet + unit tests. No database. Fast, always green.
-make test-integration  # Tier 2: spins a disposable postgres (tmpfs), runs migrations,
-                       # then the full HTTP flow tests (lifecycle, invoices, payments,
-                       # billing idempotency, quotations, portal scoping, reports).
-make test              # run after editing — Tier 1 stays green even offline
-```
-
-Tier 1 (`backend/internal/.../*_test.go`) locks the pure logic: money math,
-invoice arithmetic, subscription-line validation, and a route contract test
-that pins all 84 routes. Tier 2 (`backend/tests/integration/`) drives the real
-router over an `httptest.Server` with a real Postgres and a cookie jar, the same
-way Postman would. Integration tests self-skip when `TEST_DATABASE_URL` is
-unset, so `go test ./...` and `make test` keep working without a database.
+## What exists
 
 | Area | Status |
 | --- | --- |

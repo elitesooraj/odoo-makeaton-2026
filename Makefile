@@ -23,7 +23,7 @@ COMPOSE_DATABASE_URL ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgre
 
 .PHONY: help up up-prod bootstrap-prod down logs ps build build-prod frontend \
 	db-up migrate-up migrate-down migrate-force migrate-create \
-	seed seed-prod test test-integration vet fmt tidy config config-prod clean
+	seed seed-prod test vet fmt tidy config config-prod clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -86,12 +86,12 @@ seed: ## Re-run the idempotent seed job (runs automatically with `up`)
 seed-prod: ## Seed the production stack (idempotent)
 	$(COMPOSE) $(PROD) $(TOOLS_PROFILE) run --rm seed
 
-test: ## Run vet and unit tests in the build image (no database)
+test: ## Run vet and unit tests in the build image
 	$(COMPOSE) $(TOOLS_PROFILE) run --rm test
 
-test-integration: ## Run vet, unit tests and DB integration tests against a disposable postgres
+test-integration: ## Run vet + unit + DB integration tests against a disposable postgres
 	$(COMPOSE) $(TOOLS_PROFILE) up -d --wait testdb
-	$(COMPOSE) run --rm -e TEST_DATABASE_URL="postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@testdb:5432/brightloop?sslmode=disable" test go vet ./... && go test ./...
+	$(COMPOSE) run --rm -e TEST_DATABASE_URL="postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@testdb:5432/$(POSTGRES_DB)?sslmode=disable" test go vet ./... \&\& go test ./...
 	$(COMPOSE) $(TOOLS_PROFILE) stop testdb
 
 vet: ## Run go vet in the build image

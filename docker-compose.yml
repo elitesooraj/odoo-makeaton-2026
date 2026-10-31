@@ -44,13 +44,15 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       # Prove TCP readiness, not unix-socket readiness. On first boot the
-      # initdb bootstrap server answers socket probes before the real TCP
-      # listener exists, which let the migrate job race ahead into
-      # "connection refused". -h 127.0.0.1 forces a TCP probe.
+      # initdb bootstrap server answers socket probes only, which used to
+      # mark this container healthy before the real TCP listener existed —
+      # the migrate job then raced ahead into "connection refused".
+      # -h 127.0.0.1 forces a TCP probe that passes only after initdb.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
       interval: 5s
       timeout: 3s
       retries: 10
+      # A slow first-boot initdb may fail early probes; don't count them.
       start_period: 10s
     restart: unless-stopped
     logging: *default-logging
@@ -98,7 +100,11 @@ services:
     logging: *default-logging
 
   # Bootstrap: creates the admin (and optional finance staff) once. Runs as
-  # part of every `docker compose up` right after migrations; idempotent.
+  # part of every `docker compose up` right after migrations; it is idempotent
+  # and never overwrites an existing password, so repeat runs are no-ops.
+  # With no ADMIN_PASSWORD set it generates a temporary one and prints it in
+  # the logs (`docker compose logs seed`). Production disables this via
+  # docker-compose.prod.yml; there you run `make seed-prod` once.
   seed:
     build:
       context: ./backend
@@ -118,26 +124,23 @@ services:
     logging: *default-logging
 
   # Disposable database for `make test-integration`. tmpfs keeps it fast and
-  # wipes itself when the container stops.
+  # wipes itself when the container stops; the data never reaches the volume.
   testdb:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-brightloop}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brightloop}
-      POSTGRES_DB: brightloop
-    ports:
-      - "127.0.0.1:${TESTDB_PORT:-55432}:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-brightloop}
     tmpfs:
       - /var/lib/postgresql/data
-    shm_size: "128m"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d brightloop"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 10s
-    restart: "no"
     profiles: ["tools"]
+    restart: "no"
     logging: *default-logging
 
   # Unit tests and static checks inside the build image. Run with `make test`.

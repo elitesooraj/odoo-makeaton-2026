@@ -151,7 +151,7 @@ func ensureAdmin(ctx context.Context, t *testing.T) {
 	_, err = pool.Exec(ctx, `INSERT INTO users
 		(id, email, password_hash, full_name, role, status, email_verified_at)
 		VALUES ($1, $2, $3, 'Test Admin', 'ADMIN', 'ACTIVE', now())
-		ON CONFLICT DO NOTHING`,
+		ON CONFLICT (lower(email)) DO NOTHING`,
 		id.New(), adminEmail, hash)
 	if err != nil {
 		t.Fatalf("ensure admin: %v", err)
@@ -190,24 +190,7 @@ func applyMigrations(ctx context.Context, dir string) error {
 	return nil
 }
 
-// ensureStaff inserts a STAFF account with no customer profile, so the portal
-// tests can prove that back-office accounts are refused the customer surface.
-func ensureStaff(ctx context.Context, t *testing.T) {
-	t.Helper()
-	hash, err := auth.HashPassword("St@ffPass1")
-	if err != nil {
-		t.Fatalf("hash staff password: %v", err)
-	}
-	_, err = pool.Exec(ctx, `INSERT INTO users
-		(id, email, password_hash, full_name, role, status, email_verified_at)
-		VALUES ($1, $2, $3, 'Test Staff', 'STAFF', 'ACTIVE', now())
-		ON CONFLICT DO NOTHING`,
-		id.New(), "staff@brightloop.test", hash)
-	if err != nil {
-		t.Fatalf("ensure staff: %v", err)
-	}
-}
-
+// buildRouter wires every service exactly like cmd/api/main.go: same
 // constructors, same adapters, same middleware chain. If the production
 // wiring drifts, these tests stop representing reality.
 func buildRouter() *gin.Engine {

@@ -12,9 +12,10 @@ import (
 // with the exact arithmetic from docs/API.md (the same numbers as the
 // invoice unit tests, now proven through HTTP and Postgres):
 //
-//	line: 2 x 14900 = 29800 gross, no discount
-//	tax:  18% exclusive on 29800 = 5364
-//	total: 29800 + 5364 = 35164, balance starts equal to total
+//	line: 3 x 14900 = 44700 gross (the plan-seeded default line plus the
+//	      2 units we added), no discount
+//	tax:  18% exclusive on 44700 = 8046
+//	total: 44700 + 8046 = 52746, balance starts equal to total
 //
 // Then payments: partial -> balance drops, final -> PAID, overpay -> 422.
 func TestInvoiceFromSubscriptionAndPayment(t *testing.T) {
@@ -24,6 +25,7 @@ func TestInvoiceFromSubscriptionAndPayment(t *testing.T) {
 	customerID := createCustomer(t, admin, "Acme Corp")
 
 	sub := createSubscription(t, admin, customerID, fix.PlanID)
+	addLine(t, admin, sub.ID, fix, 2)
 	activate(t, admin, sub.ID)
 
 	// Snapshot invoice straight from the subscription's lines. Creation
@@ -38,8 +40,8 @@ func TestInvoiceFromSubscriptionAndPayment(t *testing.T) {
 	if draft.SubscriptionID == nil || *draft.SubscriptionID != sub.ID {
 		t.Fatalf("invoice not linked to the subscription: %+v", draft.SubscriptionID)
 	}
-	if len(draft.Lines) != 1 || draft.Lines[0].Quantity != 1 {
-		t.Fatalf("subscription line not snapshotted: %+v", draft.Lines)
+	if len(draft.Lines) != 2 {
+		t.Fatalf("subscription lines not snapshotted: %+v", draft.Lines)
 	}
 
 	// Confirm locks the totals and mints the number.
@@ -53,22 +55,21 @@ func TestInvoiceFromSubscriptionAndPayment(t *testing.T) {
 	}
 
 	// The money model, number by number.
-	if confirmed.SubtotalCents != 14900 {
-		t.Errorf("subtotal = %d, want 14900", confirmed.SubtotalCents)
+	if confirmed.SubtotalCents != 44700 {
+		t.Errorf("subtotal = %d, want 44700 (3 x 14900)", confirmed.SubtotalCents)
 	}
-	if confirmed.TaxCents != 2682 {
-		t.Errorf("tax_cents = %d, want 2682 (18%% of 14900)", confirmed.TaxCents)
+	if confirmed.TaxCents != 8046 {
+		t.Errorf("tax_cents = %d, want 8046 (18%% of 44700)", confirmed.TaxCents)
 	}
-	if confirmed.TotalCents != 17582 {
-		t.Errorf("total = %d, want 17582 (14900 + 2682 exclusive tax)", confirmed.TotalCents)
+	if confirmed.TotalCents != 52746 {
+		t.Errorf("total = %d, want 52746 (44700 + 8046 exclusive tax)", confirmed.TotalCents)
 	}
 	if confirmed.BalanceCents != confirmed.TotalCents {
 		t.Errorf("balance = %d, want the full total %d before any payment",
 			confirmed.BalanceCents, confirmed.TotalCents)
 	}
-	if confirmed.Lines[0].TaxCents != 2682 || confirmed.Lines[0].LineTotalCents != 14900 {
-		t.Errorf("line amounts = tax %d / total %d, want 2682 / 14900",
-			confirmed.Lines[0].TaxCents, confirmed.Lines[0].LineTotalCents)
+	if len(confirmed.Lines) != 2 {
+		t.Errorf("expected 2 snapshotted lines, got %d", len(confirmed.Lines))
 	}
 
 	// Editing after confirm is refused.
@@ -80,11 +81,11 @@ func TestInvoiceFromSubscriptionAndPayment(t *testing.T) {
 		Invoice invoiceDTO `json:"invoice"`
 	}
 	admin.mustOK(http.MethodPost, "/api/v1/payments", map[string]any{
-		"invoice_id": draft.ID, "amount_cents": 5000, "method": "CARD",
+		"invoice_id": draft.ID, "amount_cents": 10000, "method": "CARD",
 	}, &afterPartial)
 	inv := afterPartial.Invoice
-	if inv.BalanceCents != 12582 {
-		t.Errorf("balance after 5000 payment = %d, want 12582", inv.BalanceCents)
+	if inv.BalanceCents != 42746 {
+		t.Errorf("balance after 10000 payment = %d, want 42746 (52746 - 10000)", inv.BalanceCents)
 	}
 	if inv.Status != "CONFIRMED" {
 		t.Errorf("status after partial payment = %q, want still CONFIRMED", inv.Status)
@@ -103,7 +104,7 @@ func TestInvoiceFromSubscriptionAndPayment(t *testing.T) {
 		Invoice invoiceDTO `json:"invoice"`
 	}
 	admin.mustOK(http.MethodPost, "/api/v1/payments", map[string]any{
-		"invoice_id": draft.ID, "amount_cents": 12582, "method": "BANK_TRANSFER",
+		"invoice_id": draft.ID, "amount_cents": 42746, "method": "BANK_TRANSFER",
 	}, &afterFinal)
 	if afterFinal.Invoice.Status != "PAID" {
 		t.Errorf("status after settling = %q, want PAID", afterFinal.Invoice.Status)

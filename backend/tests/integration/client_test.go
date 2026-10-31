@@ -229,27 +229,39 @@ func createCatalog(t *testing.T, c *client, interval string) *catalogFixture {
 // customerRecord is a back-office customer created by the admin.
 func createCustomer(t *testing.T, c *client, name string) string {
 	t.Helper()
-	slug := strings.ToLower(strings.ReplaceAll(name, " ", ""))
 	var out struct {
 		ID string `json:"id"`
 	}
 	c.mustOK(http.MethodPost, "/api/v1/customers", map[string]any{
-		"name": name, "email": slug + "@example.com",
+		"name": name, "email": safeEmail(name),
 	}, &out)
 	return out.ID
 }
 
+// safeEmail turns an arbitrary display name into a syntactically valid
+// email address, which the customer validator requires.
+func safeEmail(name string) string {
+	clean := strings.ToLower(name)
+	clean = strings.ReplaceAll(clean, " ", ".")
+	clean = strings.ReplaceAll(clean, ",", "")
+	if clean == "" {
+		clean = "customer"
+	}
+	return clean + "@brightloop.test"
+}
+
 // subscriptionDTO is the slice of /subscriptions responses these tests need.
 type subscriptionDTO struct {
-	ID              string  `json:"id"`
-	Number          string  `json:"number"`
-	CustomerID      string  `json:"customer_id"`
-	PlanID          string  `json:"plan_id"`
-	Status          string  `json:"status"`
-	NextBillingDate *string `json:"next_billing_date"`
-	QuoteExpiresAt  *string `json:"quote_expires_at"`
-	Quantity        int     `json:"quantity"`
-	Lines           []struct {
+	ID               string  `json:"id"`
+	Number           string  `json:"number"`
+	CustomerID       string  `json:"customer_id"`
+	PlanID           string  `json:"plan_id"`
+	Status           string  `json:"status"`
+	NextBillingDate  *string `json:"next_billing_date"`
+	QuoteExpiresAt   *string `json:"quote_expires_at"`
+	PaymentTermsDays int     `json:"payment_terms_days"`
+	Quantity         int     `json:"quantity"`
+	Lines            []struct {
 		ID             string  `json:"id"`
 		Quantity       int     `json:"quantity"`
 		UnitPriceCents int64   `json:"unit_price_cents"`
@@ -278,14 +290,9 @@ func addLine(t *testing.T, c *client, subID string, fix *catalogFixture, quantit
 }
 
 // activate walks DRAFT -> CONFIRMED -> ACTIVE and returns the live record.
-// Confirm is attempted but tolerated when the subscription is already in
-// CONFIRMED state, so callers may either confirm first or not.
 func activate(t *testing.T, c *client, subID string) *subscriptionDTO {
 	t.Helper()
-	status, _ := c.do(http.MethodPost, "/api/v1/subscriptions/"+subID+"/confirm", map[string]any{})
-	if status != http.StatusOK && status != http.StatusConflict {
-		t.Fatalf("confirm before activate: status %d, want 200 or 409", status)
-	}
+	c.mustOK(http.MethodPost, "/api/v1/subscriptions/"+subID+"/confirm", map[string]any{}, nil)
 	var sub subscriptionDTO
 	c.mustOK(http.MethodPost, "/api/v1/subscriptions/"+subID+"/activate", map[string]any{}, &sub)
 	return &sub

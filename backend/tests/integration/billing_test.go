@@ -58,10 +58,10 @@ func TestBillingRunBillsDueSubscriptionsAndIsIdempotent(t *testing.T) {
 	if res.SubscriptionID != subA.ID || res.Status != "CREATED" || res.InvoiceID == nil {
 		t.Fatalf("unexpected result for sub A: %+v", res)
 	}
-	if !strings.HasPrefix(res.PeriodStart, todayUTC()) {
+	if res.PeriodStart[:10] != todayUTC() {
 		t.Errorf("period_start = %s, want today %s", res.PeriodStart, todayUTC())
 	}
-	if !strings.HasPrefix(res.PeriodEnd, todayPlusDays(7)) {
+	if res.PeriodEnd[:10] != todayPlusDays(7) {
 		t.Errorf("period_end = %s, want %s (WEEKLY interval)", res.PeriodEnd, todayPlusDays(7))
 	}
 
@@ -75,7 +75,7 @@ func TestBillingRunBillsDueSubscriptionsAndIsIdempotent(t *testing.T) {
 		t.Errorf("billing invoice not linked to the subscription")
 	}
 	if inv.TotalCents != 52746 {
-		t.Errorf("billing invoice total = %d, want 52746 (3 units: auto-seeded + added line, + 18%% tax)", inv.TotalCents)
+		t.Errorf("billing invoice total = %d, want 52746 (3 x 14900 + 18%% tax)", inv.TotalCents)
 	}
 
 	// next_billing_date advanced by one WEEKLY interval.

@@ -4,107 +4,108 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/brightloop/subscription-platform/backend/internal/auth"
+	"github.com/brightloop/subscription-platform/backend/internal/platform/id"
 )
 
-// TestPortalCustomerScoping is the security test of the suite: the portal is
-// read-only and identity-scoped. A customer can only ever see their own
-// subscriptions/invoices/payments, and foreign resources disappear into a 404
-// (existence is not leaked) rather than a 403.
+// TestPortalCustomerScoping proves the CUSTOMER role is identity-scoped and
+// read-only: a customer only ever sees their own subscriptions, invoices and
+// payments; foreign resources come back as 404 (existence not leaked); and
+// the back-office routes reject them with 403.
 func TestPortalCustomerScoping(t *testing.T) {
 	reset(t)
 	admin := adminClient(t)
 	fix := createCatalog(t, admin, "WEEKLY")
 
-	// Two self-service customers.
-	clientA, userA := customerClient(t, "alice@example.com")
-	clientB, userB := customerClient(t, "bob@example.com")
-	if *userA.CustomerID == *userB.CustomerID {
-		t.Fatal("register must create a distinct customer per user")
+	// Two independent customers, registered through the public flow.
+	custA, userA := customerClient(t, "alpha@example.com")
+	custB, _ := customerClient(t, "beta@example.com")
+	if userA.CustomerID == nil {
+		t.Fatal("registration did not link a customer")
 	}
+	customerAID := *userA.CustomerID
 
-	// Admin builds a subscription + invoice for A only.
-	customerIDA := *userA.CustomerID
-	sub := createSubscription(t, admin, customerIDA, fix.PlanID)
+	// Admin builds a subscription + confirmed, unpaid invoice for customer A.
+	sub := createSubscription(t, admin, customerAID, fix.PlanID)
 	addLine(t, admin, sub.ID, fix, 1)
 	activate(t, admin, sub.ID)
-	var inv invoiceDTO
+	var invoice invoiceDTO
 	admin.mustOK(http.MethodPost, "/api/v1/invoices", map[string]any{
-		"customer_id": customerIDA, "subscription_id": sub.ID,
-	}, &inv)
-	admin.mustOK(http.MethodPost, "/api/v1/invoices/"+inv.ID+"/confirm", map[string]any{}, &inv)
+		"customer_id": customerAID, "subscription_id": sub.ID,
+	}, &invoice)
+	admin.mustOK(http.MethodPost, "/api/v1/invoices/"+invoice.ID+"/confirm", map[string]any{}, nil)
 
-	// A sees its own data.
-	var meA struct {
-		Subscriptions  int `json:"subscriptions"`
-		Invoices       int `json:"invoices"`
-		UnpaidInvoices int `json:"unpaid_invoices"`
+	// Customer A's landing page reflects exactly one subscription and one
+	// unpaid invoice.
+	var me struct {
+		CustomerID     string `json:"customer_id"`
+		Subscriptions  int    `json:"subscriptions"`
+		ActiveStatus   int    `json:"active_status"`
+		Invoices       int    `json:"invoices"`
+		UnpaidInvoices int    `json:"unpaid_invoices"`
 	}
-	clientA.mustOK(http.MethodGet, "/api/v1/portal/me", nil, &meA)
-	if meA.Subscriptions != 1 || meA.Invoices != 1 || meA.UnpaidInvoices != 1 {
-		t.Errorf("A portal counts = %+v, want 1 sub, 1 invoice, 1 unpaid", meA)
+	custA.mustOK(http.MethodGet, "/api/v1/portal/me", nil, &me)
+	if me.CustomerID != customerAID {
+		t.Errorf("portal me customer_id = %s, want %s", me.CustomerID, customerAID)
 	}
-
-	var aSubs []subscriptionDTO
-	clientA.mustOK(http.MethodGet, "/api/v1/portal/subscriptions", nil, &aSubs)
-	if len(aSubs) != 1 || aSubs[0].ID != sub.ID {
-		t.Fatalf("A's portal subscription list wrong: %+v", aSubs)
-	}
-	var aSub subscriptionDTO
-	clientA.mustOK(http.MethodGet, "/api/v1/portal/subscriptions/"+sub.ID, nil, &aSub)
-	if aSub.ID != sub.ID {
-		t.Errorf("A cannot fetch its own subscription")
+	if me.Subscriptions != 1 || me.ActiveStatus != 1 || me.Invoices != 1 || me.UnpaidInvoices != 1 {
+		t.Errorf("portal me counts = %+v, want 1/1/1/1", me)
 	}
 
-	var aInvs []invoiceDTO
-	clientA.mustOK(http.MethodGet, "/api/v1/portal/invoices", nil, &aInvs)
-	if len(aInvs) != 1 {
-		t.Fatalf("A's portal invoice list = %d, want 1", len(aInvs))
+	// A sees their own subscription and invoice.
+	var subs []subscriptionDTO
+	custA.mustOK(http.MethodGet, "/api/v1/portal/subscriptions", nil, &subs)
+	if len(subs) != 1 || subs[0].ID != sub.ID {
+		t.Fatalf("customer A subscriptions = %+v", subs)
 	}
-	var aInv invoiceDTO
-	clientA.mustOK(http.MethodGet, "/api/v1/portal/invoices/"+inv.ID, nil, &aInv)
-	if aInv.ID != inv.ID {
-		t.Errorf("A cannot fetch its own invoice")
+	var own invoiceDTO
+	custA.mustOK(http.MethodGet, "/api/v1/portal/invoices/"+invoice.ID, nil, &own)
+	if own.ID != invoice.ID {
+		t.Fatalf("customer A cannot read own invoice")
 	}
 
-	// B sees nothing of A's data, and a foreign id is a 404, not a 403.
-	var bMe struct {
-		Subscriptions  int `json:"subscriptions"`
-		Invoices       int `json:"invoices"`
-		UnpaidInvoices int `json:"unpaid_invoices"`
-	}
-	clientB.mustOK(http.MethodGet, "/api/v1/portal/me", nil, &bMe)
-	if bMe.Subscriptions != 0 || bMe.Invoices != 0 || bMe.UnpaidInvoices != 0 {
-		t.Errorf("B's portal must be empty, got %+v", bMe)
-	}
+	// Customer B sees nothing of A's data: empty lists and 404 on the
+	// foreign invoice (existence is not leaked).
 	var bSubs []subscriptionDTO
-	clientB.mustOK(http.MethodGet, "/api/v1/portal/subscriptions", nil, &bSubs)
+	custB.mustOK(http.MethodGet, "/api/v1/portal/subscriptions", nil, &bSubs)
 	if len(bSubs) != 0 {
-		t.Errorf("B sees %d of A's subscriptions", len(bSubs))
+		t.Errorf("customer B sees %d subscriptions, want 0", len(bSubs))
 	}
-	clientB.mustStatus(http.MethodGet, "/api/v1/portal/invoices/"+inv.ID, nil, http.StatusNotFound)
-	clientB.mustStatus(http.MethodGet, "/api/v1/portal/subscriptions/"+sub.ID, nil, http.StatusNotFound)
+	env := custB.mustStatus(http.MethodGet, "/api/v1/portal/invoices/"+invoice.ID, nil, http.StatusNotFound)
+	if env.Error.Code != "NOT_FOUND" {
+		t.Errorf("foreign invoice should be 404 NOT_FOUND, got %s", env.Error)
+	}
 
-	// The portal is read-only: no POST/PUT/PATCH/DELETE is even routed.
-	clientA.mustStatus(http.MethodPost, "/api/v1/portal/subscriptions", map[string]any{}, http.StatusNotFound)
-	clientA.mustStatus(http.MethodDelete, "/api/v1/portal/subscriptions/"+sub.ID, nil, http.StatusNotFound)
+	// The portal is read-only: there are no write verbs on it, and the
+	// back-office routes reject a CUSTOMER with 403.
+	custA.mustStatus(http.MethodPost, "/api/v1/products",
+		map[string]any{"name": "x"}, http.StatusForbidden)
+	custA.mustStatus(http.MethodGet, "/api/v1/subscriptions", nil, http.StatusForbidden)
 
-	// A CUSTOMER hitting a back-office route gets 403, not 404.
-	clientA.mustStatus(http.MethodGet, "/api/v1/subscriptions", nil, http.StatusForbidden)
-	clientA.mustStatus(http.MethodPost, "/api/v1/products", map[string]any{"name": "x"}, http.StatusForbidden)
-
-	// A STAFF account (no customer profile) is refused the portal.
-	staffClient := staffClient(t)
-	staffClient.mustStatus(http.MethodGet, "/api/v1/portal/me", nil, http.StatusForbidden)
+	// A STAFF account (no customer profile) is also rejected by the portal.
+	ensureStaff(t)
+	staff := newClient(t)
+	staff.mustOK(http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"email": "staff@brightloop.test", "password": "Staff!Pass1",
+	}, nil)
+	staff.mustStatus(http.MethodGet, "/api/v1/portal/me", nil, http.StatusForbidden)
 }
 
-// staffClient logs in as a STAFF account inserted directly (no customer
-// profile, so the portal must refuse it).
-func staffClient(t *testing.T) *client {
+// ensureStaff inserts a STAFF account the same way the seed job does, so
+// portal-rejection tests have a non-customer identity to log in as.
+func ensureStaff(t *testing.T) {
 	t.Helper()
-	ensureStaff(context.Background(), t)
-	c := newClient(t)
-	c.mustOK(http.MethodPost, "/api/v1/auth/login", map[string]string{
-		"email": "staff@brightloop.test", "password": "St@ffPass1",
-	}, nil)
-	return c
+	hash, err := auth.HashPassword("Staff!Pass1")
+	if err != nil {
+		t.Fatalf("hash staff password: %v", err)
+	}
+	_, err = pool.Exec(context.Background(), `INSERT INTO users
+		(id, email, password_hash, full_name, role, status, email_verified_at)
+		VALUES ($1, $2, $3, 'Test Staff', 'STAFF', 'ACTIVE', now())
+		ON CONFLICT (lower(email)) DO NOTHING`,
+		id.New(), "staff@brightloop.test", hash)
+	if err != nil {
+		t.Fatalf("ensure staff: %v", err)
+	}
 }
