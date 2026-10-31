@@ -119,13 +119,4 @@ make seed-prod      # once
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-## Ownership
-
-| Owner | Scope |
-| --- | --- |
-| Experienced Member 1 | `platform/`, `auth/`, `authz/`, `users/`, `customers/`, `audit/`, `api/`, migrations 0001-0099, Docker |
-| Experienced Member 2 | `products/`, `plans/`, `subscriptions/`, `invoices/`, `payments/`, `taxes/`, `discounts/`, `reports/`, migrations 0100+ |
-| Frontend Member 1 | `frontend/` auth, products, plans, customers, subscriptions, portal |
-| Frontend Member 2 | `frontend/` invoices, payments, taxes, discounts, reports |
-
 Do not edit an applied migration. Add a new one in your range.
