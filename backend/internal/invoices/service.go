@@ -352,8 +352,6 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 	totalQuantity := 0
 	for i := range drafts {
 		gross := int64(drafts[i].Quantity) * drafts[i].UnitPriceCents
-		inv2 := gross // keep the value in a local for clarity in allocation
-		_ = inv2
 		subtotal += gross
 		totalQuantity += drafts[i].Quantity
 	}
@@ -391,33 +389,13 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 	}
 
 	// 2) compute line_total = gross - discount and per-line tax
-	taxTotal := int64(0)
-	exclusiveTax := int64(0)
-	for i := range drafts {
-		g := gross(drafts[i])
-		lineTotal := g - drafts[i].DiscountCents
-		if lineTotal < 0 {
-			lineTotal = 0
-		}
-		var tax int64
-		if drafts[i].TaxRateBP > 0 {
-			if drafts[i].taxInclusive {
-				tax = money.IncludedTax(lineTotal, drafts[i].TaxRateBP)
-			} else {
-				tax = money.Percent(lineTotal, drafts[i].TaxRateBP)
-				exclusiveTax += tax
-			}
-		}
-		taxTotal += tax
-		drafts[i].LineTotalCents = lineTotal
-		drafts[i].TaxCents = tax
-	}
+	subtotal, discountTotal, taxTotal, _, total := computeTotals(drafts)
 
 	// 3) publish totals
 	inv.SubtotalCents = subtotal
 	inv.DiscountCents = discountTotal
 	inv.TaxCents = taxTotal
-	inv.TotalCents = sumLineTotals(drafts) + exclusiveTax
+	inv.TotalCents = total
 	inv.BalanceCents = inv.TotalCents
 
 	for i := range drafts {
@@ -440,6 +418,37 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 		}
 	}
 	return nil
+}
+
+// computeTotals is the pure arithmetic core of finalize(): given drafts whose
+// DiscountCents are already allocated, it computes line totals, per-line tax,
+// and the invoice-level aggregates. Extracting it makes the money model
+// testable without a database.
+func computeTotals(drafts []draftLine) (subtotal, discountTotal, taxTotal, exclusiveTax, total int64) {
+	for i := range drafts {
+		g := gross(drafts[i])
+		subtotal += g
+		discountTotal += drafts[i].DiscountCents
+
+		lineTotal := g - drafts[i].DiscountCents
+		if lineTotal < 0 {
+			lineTotal = 0
+		}
+		var tax int64
+		if drafts[i].TaxRateBP > 0 {
+			if drafts[i].taxInclusive {
+				tax = money.IncludedTax(lineTotal, drafts[i].TaxRateBP)
+			} else {
+				tax = money.Percent(lineTotal, drafts[i].TaxRateBP)
+				exclusiveTax += tax
+			}
+		}
+		drafts[i].LineTotalCents = lineTotal
+		drafts[i].TaxCents = tax
+		taxTotal += tax
+	}
+	total = sumLineTotals(drafts) + exclusiveTax
+	return
 }
 
 func gross(d draftLine) int64 { return int64(d.Quantity) * d.UnitPriceCents }

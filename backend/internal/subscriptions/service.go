@@ -339,8 +339,8 @@ func (s *Service) runTransition(
 func (s *Service) Confirm(ctx context.Context, actor *auth.Actor, meta audit.Meta, subscriptionID uuid.UUID) (*Subscription, error) {
 	return s.runTransition(ctx, actor, meta, subscriptionID, "subscription.confirm",
 		func(sub *Subscription) error {
-			if sub.Status != StatusDraft && sub.Status != StatusQuotation {
-				return httpx.Conflict("only DRAFT or QUOTATION subscriptions can be confirmed")
+			if err := assertTransition(sub.Status, StatusConfirmed); err != nil {
+				return err
 			}
 			if sub.QuoteExpiresAt != nil && time.Now().UTC().After(*sub.QuoteExpiresAt) {
 				return httpx.Conflict("this quotation has expired")
@@ -359,10 +359,7 @@ func (s *Service) Confirm(ctx context.Context, actor *auth.Actor, meta audit.Met
 func (s *Service) Activate(ctx context.Context, actor *auth.Actor, meta audit.Meta, subscriptionID uuid.UUID) (*Subscription, error) {
 	return s.runTransition(ctx, actor, meta, subscriptionID, "subscription.activate",
 		func(sub *Subscription) error {
-			if sub.Status != StatusConfirmed {
-				return httpx.Conflict("only CONFIRMED subscriptions can be activated")
-			}
-			return nil
+			return assertTransition(sub.Status, StatusActive)
 		},
 		func(ctx context.Context, tx pgx.Tx, sub *Subscription) error {
 			now := time.Now().UTC()
@@ -383,8 +380,8 @@ func (s *Service) Activate(ctx context.Context, actor *auth.Actor, meta audit.Me
 func (s *Service) Pause(ctx context.Context, actor *auth.Actor, meta audit.Meta, subscriptionID uuid.UUID) (*Subscription, error) {
 	return s.runTransition(ctx, actor, meta, subscriptionID, "subscription.pause",
 		func(sub *Subscription) error {
-			if sub.Status != StatusActive {
-				return httpx.Conflict("only ACTIVE subscriptions can be paused")
+			if err := assertTransition(sub.Status, StatusPaused); err != nil {
+				return err
 			}
 			flags, err := s.planFlags(ctx, sub.PlanID)
 			if err != nil {
@@ -404,10 +401,7 @@ func (s *Service) Pause(ctx context.Context, actor *auth.Actor, meta audit.Meta,
 func (s *Service) Resume(ctx context.Context, actor *auth.Actor, meta audit.Meta, subscriptionID uuid.UUID) (*Subscription, error) {
 	return s.runTransition(ctx, actor, meta, subscriptionID, "subscription.resume",
 		func(sub *Subscription) error {
-			if sub.Status != StatusPaused {
-				return httpx.Conflict("only PAUSED subscriptions can be resumed")
-			}
-			return nil
+			return assertTransition(sub.Status, StatusActive)
 		},
 		func(ctx context.Context, tx pgx.Tx, sub *Subscription) error {
 			return s.repo.MarkResumed(ctx, tx, sub.ID, today())
@@ -418,8 +412,8 @@ func (s *Service) Resume(ctx context.Context, actor *auth.Actor, meta audit.Meta
 func (s *Service) Close(ctx context.Context, actor *auth.Actor, meta audit.Meta, subscriptionID uuid.UUID) (*Subscription, error) {
 	return s.runTransition(ctx, actor, meta, subscriptionID, "subscription.close",
 		func(sub *Subscription) error {
-			if sub.Status != StatusActive && sub.Status != StatusPaused && sub.Status != StatusConfirmed {
-				return httpx.Conflict("only ACTIVE, PAUSED or CONFIRMED subscriptions can be closed")
+			if err := assertTransition(sub.Status, StatusClosed); err != nil {
+				return err
 			}
 			flags, err := s.planFlags(ctx, sub.PlanID)
 			if err != nil {
@@ -589,6 +583,42 @@ func buildLine(in LineInput) (Line, map[string]string, bool) {
 		line.Description = &in.Description
 	}
 	return line, nil, true
+}
+
+// transitions encodes the subscription lifecycle as a state table:
+//
+//	DRAFT -> QUOTATION, CONFIRMED
+//	QUOTATION -> CONFIRMED (unless expired)
+//	CONFIRMED -> ACTIVE, CLOSED
+//	ACTIVE -> PAUSED, CLOSED
+//	PAUSED -> ACTIVE, CLOSED
+//	CLOSED -> (terminal)
+//
+// Each transition method adds its own extra guards (expiry, plan flags) on
+// top of this table, but the table is the single source of truth for which
+// hops are legal.
+var transitions = map[string]map[string]bool{
+	StatusDraft:     {StatusQuotation: true, StatusConfirmed: true},
+	StatusQuotation: {StatusConfirmed: true},
+	StatusConfirmed: {StatusActive: true, StatusClosed: true},
+	StatusActive:    {StatusPaused: true, StatusClosed: true},
+	StatusPaused:    {StatusActive: true, StatusClosed: true},
+	StatusClosed:    {},
+}
+
+// CanTransition reports whether moving from -> to is a legal lifecycle hop.
+// It is pure and side-effect free, so the rules can be unit-tested without
+// a database.
+func CanTransition(from, to string) bool {
+	return transitions[from][to]
+}
+
+// assertTransition returns a conflict error if the hop is not legal.
+func assertTransition(from, to string) error {
+	if !CanTransition(from, to) {
+		return httpx.Conflict("a " + from + " subscription cannot move to " + to)
+	}
+	return nil
 }
 
 // editableStatus gates PATCH /subscriptions/:id. Only DRAFT and QUOTATION

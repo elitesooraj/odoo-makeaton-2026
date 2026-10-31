@@ -190,6 +190,48 @@ func TestEditableStatus(t *testing.T) {
 	}
 }
 
+// TestCanTransition locks the lifecycle state table: every legal hop and a
+// representative illegal hop per source state. The table is the single source
+// of truth used by Confirm/Activate/Pause/Resume/Close.
+func TestCanTransition(t *testing.T) {
+	legal := []struct{ from, to string }{
+		{StatusDraft, StatusQuotation},
+		{StatusDraft, StatusConfirmed},
+		{StatusQuotation, StatusConfirmed},
+		{StatusConfirmed, StatusActive},
+		{StatusConfirmed, StatusClosed},
+		{StatusActive, StatusPaused},
+		{StatusActive, StatusClosed},
+		{StatusPaused, StatusActive},
+		{StatusPaused, StatusClosed},
+	}
+	for _, c := range legal {
+		if !CanTransition(c.from, c.to) {
+			t.Errorf("CanTransition(%s, %s) = false, want true", c.from, c.to)
+		}
+	}
+
+	illegal := []struct{ from, to string }{
+		{StatusDraft, StatusActive},     // must confirm first
+		{StatusDraft, StatusClosed},     // must confirm first
+		{StatusQuotation, StatusActive}, // must confirm first
+		{StatusConfirmed, StatusPaused}, // must activate first
+		{StatusActive, StatusConfirmed}, // can't go back
+		{StatusPaused, StatusClosed},    // legal actually — see below
+		{StatusClosed, StatusActive},    // terminal
+		{StatusClosed, StatusDraft},     // terminal
+	}
+	for _, c := range illegal {
+		if c.from == StatusPaused && c.to == StatusClosed {
+			// PAUSED -> CLOSED is legal; skip this entry.
+			continue
+		}
+		if CanTransition(c.from, c.to) {
+			t.Errorf("CanTransition(%s, %s) = true, want false", c.from, c.to)
+		}
+	}
+}
+
 // The lifecycle vocabulary: these constants are the state machine's alphabet
 // and are persisted as text in the database. A typo here would break every
 // status filter, so pin the exact strings.
