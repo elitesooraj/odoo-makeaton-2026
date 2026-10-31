@@ -65,23 +65,12 @@ func (r *BillingRuns) Record(ctx context.Context, q db.Querier, res RunResult, i
 		(id, subscription_id, period_start, period_end, invoice_id, status, error)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (subscription_id, period_start) DO NOTHING`,
-		id(), res.SubscriptionID, dateArg(res.PeriodStart), dateArg(res.PeriodEnd),
-		uuidPtrArg(invoiceID), statusOf(res), detail)
+		id.New(), res.SubscriptionID, res.PeriodStart, res.PeriodEnd,
+		invoiceID, statusOf(res), detail)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
-}
-
-func id() uuid.UUID { return uuid.Must(uuid.NewV7()) }
-
-func dateArg(t time.Time) any { return t }
-
-func uuidPtrArg(v *uuid.UUID) any {
-	if v == nil {
-		return nil
-	}
-	return *v
 }
 
 func statusOf(res RunResult) string {
@@ -236,7 +225,7 @@ func (s *Service) billOne(ctx context.Context, actor *auth.Actor, meta audit.Met
 		} else {
 			next = periodEnd
 			if _, err := tx.Exec(ctx, `UPDATE subscriptions SET next_billing_date = $2 WHERE id = $1`,
-				sub.ID, dateArg(next)); err != nil {
+				sub.ID, next); err != nil {
 				return err
 			}
 			result = RunResult{
