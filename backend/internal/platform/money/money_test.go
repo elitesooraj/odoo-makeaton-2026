@@ -346,6 +346,29 @@ func TestMonthlyEquivalent(t *testing.T) {
 	}
 }
 
+func TestPercentBoundaryValues(t *testing.T) {
+	cases := []struct {
+		name        string
+		value       int64
+		basisPoints int
+		want        int64
+	}{
+		{"1 basis point (0.01%)", 10000, 1, 1},
+		{"9999 basis points (99.99%)", 10000, 9999, 9999},
+		{"10000 basis points (100%)", 10000, 10000, 10000},
+		{"negative basis points yields zero", 10000, -1, 0},
+		{"basis points 10001 on 100 cents", 100, 10001, 100},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Percent(tc.value, tc.basisPoints); got != tc.want {
+				t.Fatalf("Percent(%d, %d) = %d, want %d", tc.value, tc.basisPoints, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMinMax(t *testing.T) {
 	if Min(3, 7) != 3 {
 		t.Fatal("Min(3, 7) must be 3")
