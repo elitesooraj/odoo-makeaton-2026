@@ -94,7 +94,7 @@ func run() error {
 	discountsSvc := discounts.NewService(discounts.NewRepository(pool))
 	discountHandler := discounts.NewHandler(discountsSvc)
 
-	subscriptionsSvc := subscriptions.NewService(pool, recorder, api.NewPlanAdapter(plansSvc))
+	subscriptionsSvc := subscriptions.NewService(pool, recorder, api.NewPlanAdapter(plansSvc), nil)
 	subscriptionHandler := subscriptions.NewHandler(subscriptionsSvc)
 
 	invoicesSvc := invoices.NewService(pool, recorder, subscriptionsSvc, discountsSvc, api.NewTaxAdapter(taxesSvc))
