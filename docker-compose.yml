@@ -43,10 +43,17 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
+      # Prove TCP readiness, not unix-socket readiness. On first boot the
+      # initdb bootstrap server answers socket probes only, which used to
+      # mark this container healthy before the real TCP listener existed —
+      # the migrate job then raced ahead into "connection refused".
+      # -h 127.0.0.1 forces a TCP probe that passes only after initdb.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
       interval: 5s
       timeout: 3s
       retries: 10
+      # A slow first-boot initdb may fail early probes; don't count them.
+      start_period: 10s
     restart: unless-stopped
     logging: *default-logging
 
