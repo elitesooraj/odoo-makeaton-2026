@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # Dependency layer: changes only when go.mod/go.sum change.
-FROM golang:1.24-alpine AS deps
+# Keep this in sync with the `go` directive in go.mod (currently 1.25). The
+# official golang images set GOTOOLCHAIN=local, so a mismatch is a hard error.
+FROM golang:1.25-alpine AS deps
 
 WORKDIR /src
 COPY go.mod go.sum ./

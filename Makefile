@@ -4,7 +4,10 @@
 SHELL := /bin/sh
 COMPOSE := docker compose
 PROD := -f docker-compose.yml -f docker-compose.prod.yml
-DEV_PROFILE := --profile dev
+# In the base file everything except `test` and `frontend` is default-profile,
+# so plain `docker compose up` starts postgres, migrations, seed, api and
+# mailpit. The prod override re-profiles mailpit and seed (dev/tools), which
+# is why the explicit flags below remain for the tools/prod targets.
 TOOLS_PROFILE := --profile tools
 FRONTEND_PROFILE := --profile frontend
 
@@ -25,9 +28,8 @@ COMPOSE_DATABASE_URL ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgre
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
 
-up: ## Build and start the local stack, then seed bootstrap accounts
-	$(COMPOSE) $(DEV_PROFILE) up -d --build
-	$(COMPOSE) $(TOOLS_PROFILE) run --rm seed
+up: ## Build and start the whole stack (migrations + seed run automatically)
+	$(COMPOSE) up -d --build
 	@echo ""
 	@echo "API      http://localhost:$${API_PORT:-8080}"
 	@echo "Mailpit  http://localhost:$${MAILPIT_UI_PORT:-8025}"
@@ -39,7 +41,7 @@ up-prod: ## Start the production stack (does not seed)
 bootstrap-prod: up-prod seed-prod ## Start production and seed once
 
 down: ## Stop the stack (keeps the database volume)
-	$(COMPOSE) $(DEV_PROFILE) $(TOOLS_PROFILE) $(FRONTEND_PROFILE) down --remove-orphans
+	$(COMPOSE) $(TOOLS_PROFILE) $(FRONTEND_PROFILE) down --remove-orphans
 
 logs: ## Follow API logs
 	$(COMPOSE) logs -f api
@@ -57,7 +59,7 @@ frontend: ## Start the frontend behind the api
 	$(COMPOSE) $(FRONTEND_PROFILE) up -d --build frontend
 
 db-up: ## Start only postgres and mailpit
-	$(COMPOSE) $(DEV_PROFILE) up -d postgres mailpit
+	$(COMPOSE) up -d postgres mailpit
 
 migrate-up: ## Apply all migrations
 	$(COMPOSE) run --rm --entrypoint migrate migrate \
@@ -78,14 +80,19 @@ migrate-create: ## Create a migration pair: make migrate-create name=add_widgets
 		create -ext sql -dir /migrations -seq $(name)
 	@echo "Rename the generated files into your reserved range (see docs/CONVENTIONS.md)."
 
-seed: ## Create the admin and finance staff (idempotent)
-	$(COMPOSE) $(TOOLS_PROFILE) run --rm seed
+seed: ## Re-run the idempotent seed job (runs automatically with `up`)
+	$(COMPOSE) run --rm seed
 
 seed-prod: ## Seed the production stack (idempotent)
 	$(COMPOSE) $(PROD) $(TOOLS_PROFILE) run --rm seed
 
 test: ## Run vet and unit tests in the build image
 	$(COMPOSE) $(TOOLS_PROFILE) run --rm test
+
+test-integration: ## Run vet + unit + DB integration tests against a disposable postgres
+	$(COMPOSE) $(TOOLS_PROFILE) up -d --wait testdb
+	$(COMPOSE) run --rm -e TEST_DATABASE_URL="postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@testdb:5432/$(POSTGRES_DB)?sslmode=disable" test go vet ./... \&\& go test ./...
+	$(COMPOSE) $(TOOLS_PROFILE) stop testdb
 
 vet: ## Run go vet in the build image
 	$(COMPOSE) $(TOOLS_PROFILE) run --rm test go vet ./...
@@ -99,7 +106,7 @@ tidy: ## Tidy modules on the host files through the build image
 		-v "$(CURDIR)/backend:/src" -w /src test go mod tidy
 
 config: ## Validate the local Compose configuration
-	$(COMPOSE) $(DEV_PROFILE) config --quiet
+	$(COMPOSE) config --quiet
 
 config-prod: ## Validate the production Compose configuration
 	$(COMPOSE) $(PROD) config --quiet
@@ -107,4 +114,4 @@ config-prod: ## Validate the production Compose configuration
 clean: ## Stop the stack and delete the database volume
 	@echo "This deletes the postgres volume. Ctrl-C to abort."
 	@sleep 3
-	$(COMPOSE) $(DEV_PROFILE) $(TOOLS_PROFILE) $(FRONTEND_PROFILE) down -v --remove-orphans
+	$(COMPOSE) $(TOOLS_PROFILE) $(FRONTEND_PROFILE) down -v --remove-orphans

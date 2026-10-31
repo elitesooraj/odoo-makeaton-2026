@@ -44,13 +44,16 @@ Or in one step:
 make bootstrap-prod
 ```
 
-`make up-prod` does **not** seed. Seeding is idempotent but creating accounts is
-a deliberate operation on a server.
+`make up-prod` does **not** seed. In development the seed runs as part of every
+`docker compose up` (idempotent, never overwrites a password); the production
+override re-profiles it behind `tools` so account creation stays a deliberate,
+explicit operation on a server.
 
 The boot order is enforced by Compose:
 
 ```text
 postgres (healthy) -> migrate (exit 0) -> api
+                                 \-> seed (exit 0)
 ```
 
 ## 3. TLS and reverse proxy
@@ -116,9 +119,12 @@ automatically.
 
 ## Notes
 
-- `mailpit` is in the `dev` profile, so `make up-prod` never starts it.
-- `seed` and `test` are in the `tools` profile, so they are never started by
-  `up`.
+- In the base (development) file, only `test` (`tools` profile) and `frontend`
+  (`frontend` profile) are profile-gated; everything else — postgres, migrate,
+  seed, api, mailpit — starts with plain `docker compose up`.
+- The production override re-profiles `mailpit` under `dev` and `seed` under
+  `tools`, so `make up-prod` never starts the mail catcher and never seeds
+  automatically.
 - The API image is `brightloop-api:local` by default. CI can push the same image
   to a registry and set `API_IMAGE` instead of rebuilding on the server.
 - `make clean` deletes the database volume. There is no confirmation prompt

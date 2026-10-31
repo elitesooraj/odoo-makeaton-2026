@@ -43,16 +43,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
+      # Prove TCP readiness, not unix-socket readiness. On first boot the
+      # initdb bootstrap server answers socket probes only, which used to
+      # mark this container healthy before the real TCP listener existed —
+      # the migrate job then raced ahead into "connection refused".
+      # -h 127.0.0.1 forces a TCP probe that passes only after initdb.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
       interval: 5s
       timeout: 3s
       retries: 10
+      # A slow first-boot initdb may fail early probes; don't count them.
+      start_period: 10s
     restart: unless-stopped
     logging: *default-logging
 
   mailpit:
     image: axllent/mailpit:latest
-    profiles: ["dev"]
     ports:
       - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
       - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
@@ -93,7 +99,12 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
-  # One-shot bootstrap. Run with `make seed`; never started by `up`.
+  # Bootstrap: creates the admin (and optional finance staff) once. Runs as
+  # part of every `docker compose up` right after migrations; it is idempotent
+  # and never overwrites an existing password, so repeat runs are no-ops.
+  # With no ADMIN_PASSWORD set it generates a temporary one and prints it in
+  # the logs (`docker compose logs seed`). Production disables this via
+  # docker-compose.prod.yml; there you run `make seed-prod` once.
   seed:
     build:
       context: ./backend
@@ -109,6 +120,25 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    restart: "no"
+    logging: *default-logging
+
+  # Disposable database for `make test-integration`. tmpfs keeps it fast and
+  # wipes itself when the container stops; the data never reaches the volume.
+  testdb:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brightloop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brightloop}
+      POSTGRES_DB: ${POSTGRES_DB:-brightloop}
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     profiles: ["tools"]
     restart: "no"
     logging: *default-logging
