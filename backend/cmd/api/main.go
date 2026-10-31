@@ -14,10 +14,21 @@ import (
 	"github.com/brightloop/subscription-platform/backend/internal/api"
 	"github.com/brightloop/subscription-platform/backend/internal/audit"
 	"github.com/brightloop/subscription-platform/backend/internal/auth"
+	"github.com/brightloop/subscription-platform/backend/internal/billing"
 	"github.com/brightloop/subscription-platform/backend/internal/customers"
+	"github.com/brightloop/subscription-platform/backend/internal/discounts"
+	"github.com/brightloop/subscription-platform/backend/internal/invoices"
+	"github.com/brightloop/subscription-platform/backend/internal/payments"
+	"github.com/brightloop/subscription-platform/backend/internal/plans"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/config"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/db"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/mailer"
+	"github.com/brightloop/subscription-platform/backend/internal/portal"
+	"github.com/brightloop/subscription-platform/backend/internal/products"
+	"github.com/brightloop/subscription-platform/backend/internal/quotations"
+	"github.com/brightloop/subscription-platform/backend/internal/reports"
+	"github.com/brightloop/subscription-platform/backend/internal/subscriptions"
+	"github.com/brightloop/subscription-platform/backend/internal/taxes"
 	"github.com/brightloop/subscription-platform/backend/internal/users"
 )
 
@@ -27,6 +38,12 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// Set at build time with -ldflags "-X main.version=... -X main.commit=...".
+var (
+	version = "dev"
+	commit  = "unknown"
+)
 
 func run() error {
 	cfg, err := config.Load()
@@ -57,18 +74,63 @@ func run() error {
 	recorder := audit.NewRecorder(pool)
 
 	customerRepo := customers.NewRepository(pool)
-	customerSvc := customers.NewService(customerRepo, recorder)
+	customersSvc := customers.NewService(customerRepo, recorder)
 
 	authRepo := auth.NewRepository(pool)
-	authSvc := auth.NewService(authRepo, customerSvc, mail, cfg.AppBaseURL, cfg.SessionTTL)
+	authSvc := auth.NewService(authRepo, customersSvc, mail, cfg.AppBaseURL, cfg.SessionTTL)
 
 	usersSvc := users.NewService(users.NewRepository(pool), authRepo, recorder)
 
+	// Business modules.
+	productsSvc := products.NewService(products.NewRepository(pool))
+	productHandler := products.NewHandler(productsSvc)
+
+	plansSvc := plans.NewService(plans.NewRepository(pool), productsSvc)
+	planHandler := plans.NewHandler(plansSvc)
+
+	taxesSvc := taxes.NewService(taxes.NewRepository(pool))
+	taxHandler := taxes.NewHandler(taxesSvc)
+
+	discountsSvc := discounts.NewService(discounts.NewRepository(pool))
+	discountHandler := discounts.NewHandler(discountsSvc)
+
+	subscriptionsSvc := subscriptions.NewService(pool, recorder, api.NewPlanAdapter(plansSvc))
+	subscriptionHandler := subscriptions.NewHandler(subscriptionsSvc)
+
+	invoicesSvc := invoices.NewService(pool, recorder, subscriptionsSvc, discountsSvc, api.NewTaxAdapter(taxesSvc))
+	invoiceHandler := invoices.NewHandler(invoicesSvc)
+
+	paymentsSvc := payments.NewService(payments.NewRepository(pool), invoicesSvc.Repo(), recorder)
+	paymentHandler := payments.NewHandler(paymentsSvc)
+
+	quotationsSvc := quotations.NewService(pool, recorder, subscriptionsSvc, api.NewPlanAdapter(plansSvc))
+	quotationHandler := quotations.NewHandler(quotationsSvc)
+
+	billingSvc := billing.NewService(pool, subscriptionsSvc, invoicesSvc, recorder)
+	billingHandler := billing.NewHandler(billingSvc)
+
+	reportsSvc := reports.NewService(pool)
+	reportHandler := reports.NewHandler(reportsSvc)
+
+	portalSvc := portal.NewService(pool, subscriptionsSvc, invoicesSvc, paymentsSvc)
+	portalHandler := portal.NewHandler(portalSvc)
+
 	router := api.NewRouter(cfg, pool, api.Deps{
-		AuthService:      authSvc,
-		AuthHandler:      auth.NewHandler(authSvc, cfg.SessionCookieName, cfg.SessionTTL, cfg.SecureCookies),
-		UsersHandler:     users.NewHandler(usersSvc),
-		CustomersHandler: customers.NewHandler(customerSvc),
+		AuthService:          authSvc,
+		AuthHandler:          auth.NewHandler(authSvc, cfg.SessionCookieName, cfg.SessionTTL, cfg.SecureCookies),
+		UsersHandler:         users.NewHandler(usersSvc),
+		CustomersHandler:     customers.NewHandler(customersSvc),
+		ProductsHandler:      productHandler,
+		PlansHandler:         planHandler,
+		TaxesHandler:         taxHandler,
+		DiscountsHandler:     discountHandler,
+		SubscriptionsHandler: subscriptionHandler,
+		InvoicesHandler:      invoiceHandler,
+		PaymentsHandler:      paymentHandler,
+		QuotationsHandler:    quotationHandler,
+		BillingHandler:       billingHandler,
+		ReportsHandler:       reportHandler,
+		PortalHandler:        portalHandler,
 	})
 
 	server := &http.Server{
@@ -82,7 +144,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("api listening", "port", cfg.HTTPPort, "env", cfg.Env)
+		logger.Info("api listening", "port", cfg.HTTPPort, "env", cfg.Env, "version", version, "commit", commit)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
