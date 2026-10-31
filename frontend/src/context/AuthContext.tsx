@@ -16,6 +16,7 @@ interface AuthContextType {
   register: (data: { email: string; password: string; full_name: string; company_name: string }) => Promise<User>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  clearError: () => void;
 }
 
 export const AuthContext = React.createContext<AuthContextType | undefined>(undefined);
@@ -30,11 +31,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const currentUser = await authApi.getMe();
       setUser(currentUser);
       setError(null);
-    } catch (err) {
-      if (err instanceof ApiException && err.status === 401) {
-        setUser(null);
+    } catch (err: any) {
+      if (err instanceof ApiException) {
+        if (err.status === 401) {
+          setUser(null);
+        } else {
+          setError(err.message);
+        }
       } else {
-        console.error('Session check failed', err);
+        setError('Server Error: Failed to connect to Brightloop backend API');
       }
     } finally {
       setLoading(false);
@@ -53,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       return loggedIn;
     } catch (err: any) {
-      const msg = err instanceof ApiException ? err.message : 'Login failed';
+      const msg = err instanceof ApiException ? err.message : 'Server Error: Login failed';
       setError(msg);
       throw err;
     } finally {
@@ -69,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setError(null);
       return registered;
     } catch (err: any) {
-      const msg = err instanceof ApiException ? err.message : 'Registration failed';
+      const msg = err instanceof ApiException ? err.message : 'Server Error: Registration failed';
       setError(msg);
       throw err;
     } finally {
@@ -110,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     register,
     logout,
     refresh,
+    clearError: () => setError(null),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -122,4 +128,3 @@ export function useAuth() {
   }
   return context;
 }
-

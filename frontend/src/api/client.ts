@@ -1,6 +1,6 @@
 import { ApiError, ApiResponse } from './types';
 
-const API_BASE_URL = '/api/v1';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || '/api/v1';
 
 export class ApiException extends Error {
   code: string;
@@ -47,11 +47,20 @@ export async function request<T>(
     ...options.headers,
   };
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-    credentials: 'include', // Mandated by Brightloop session cookie convention
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: 'include', // Mandated by Brightloop session cookie convention
+    });
+  } catch (netErr: any) {
+    throw new ApiException(503, {
+      code: 'SERVER_UNREACHABLE',
+      message: `Server Error: Unable to reach backend at ${url}. Please ensure the Go server is running.`,
+      request_id: '',
+    });
+  }
 
   if (response.status === 204) {
     return { data: null as unknown as T };
@@ -71,8 +80,14 @@ export async function request<T>(
   }
 
   if (!response.ok) {
+    const isProxyDown =
+      response.status >= 500 &&
+      (rawText.includes('ECONNREFUSED') || rawText.includes('proxy error') || !body);
+
     const errorBody: ApiError['error'] = body?.error || {
-      code: response.status === 401
+      code: isProxyDown
+        ? 'SERVER_CONNECTION_ERROR'
+        : response.status === 401
         ? 'UNAUTHENTICATED'
         : response.status === 403
         ? 'FORBIDDEN'
@@ -82,8 +97,10 @@ export async function request<T>(
         ? 'CONFLICT'
         : response.status === 422
         ? 'VALIDATION_FAILED'
-        : 'INTERNAL',
-      message: body?.message || response.statusText || 'Request failed',
+        : 'INTERNAL_SERVER_ERROR',
+      message: isProxyDown
+        ? 'Server Error: Backend API at http://localhost:8080 is offline (Connection Refused). Please start the Go server.'
+        : body?.message || response.statusText || 'Server Error: Request failed',
       request_id: '',
     };
     throw new ApiException(response.status, errorBody);

@@ -9,12 +9,14 @@ import { useToast } from '@/components/ui/toast';
 import { ApiException } from '@/api/client';
 
 export function AuthPage() {
-  const { login, register } = useAuth();
+  const { login, register, error: serverError } = useAuth();
   const { toast } = useToast();
 
   const [mode, setMode] = React.useState<'login' | 'register' | 'forgot'>('login');
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  const displayError = error || serverError;
 
   // Form states
   const [email, setEmail] = React.useState('');
@@ -167,10 +169,10 @@ export function AuthPage() {
             </CardHeader>
 
             <CardContent>
-              {error && (
-                <div className="mb-4 flex items-center gap-2 p-3 text-xs rounded-lg bg-destructive/15 text-rose-300 border border-destructive/30">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{error}</span>
+              {displayError && (
+                <div className="mb-4 flex items-start gap-2 p-3 text-xs rounded-lg bg-destructive/15 text-rose-300 border border-destructive/30">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-400" />
+                  <span className="leading-relaxed">{displayError}</span>
                 </div>
               )}
 
