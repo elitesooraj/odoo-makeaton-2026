@@ -4,10 +4,12 @@ Unified platform for plans, subscriptions and recurring billing. Modular
 monolith: React + TypeScript + Vite frontend, Go + Gin API, PostgreSQL, Docker
 Compose.
 
-This repository currently contains **Experienced Member 1's foundation**:
-project setup, database connection, migrations, authentication, RBAC, password
-reset, Docker, and the shared backend conventions. The business modules are
-scaffolded for Member 2 to fill in.
+This repository has **Member 1's foundation** (project setup, database,
+migrations, authentication, RBAC, password reset, Docker) and **Member 2's
+business modules**: products, plans, taxes, discounts, subscriptions,
+quotations, invoices, payments, billing runs, reports and the customer portal —
+all routes implemented and smoke-tested, documented in
+[`docs/API.md`](docs/API.md).
 
 ## Quick start
 
@@ -48,7 +50,8 @@ curl -b cookies.txt http://localhost:8080/api/v1/auth/me
 - [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) — the contract every module
   follows: envelopes, errors, pagination, money, IDs, migrations, audit, RBAC.
 - [`docs/api/openapi.yaml`](docs/api/openapi.yaml) — implemented endpoints.
-  Member 2 appends new paths to the same file.
+- [`docs/API.md`](docs/API.md) — business-module route reference: permissions,
+  payload shapes, lifecycle rules, portal scoping.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — production deployment, TLS,
   backups and the hardening checklist.
 - [`docs/adr/`](docs/adr/) — architecture decisions.
@@ -69,7 +72,7 @@ curl -b cookies.txt http://localhost:8080/api/v1/auth/me
 | Customer CRUD with soft deactivate | done |
 | Audit log for user/customer mutations | done |
 | Docker Compose + Makefile | done |
-| Products, plans, subscriptions, quotations, billing, invoices, payments, taxes, discounts, reports | scaffold only (Member 2) |
+| Products, plans, taxes, discounts, subscriptions, quotations, invoices, payments, billing, reports, portal | routes implemented (thin) |
 | React application | placeholder (Frontend 1 and 2) |
 
 ## Layout
@@ -86,8 +89,9 @@ backend/
     customers/          customer CRUD
     audit/              append-only audit writer
     api/                route composition
-    products/ plans/ subscriptions/ invoices/ payments/ taxes/ discounts/ reports/
-                        Member 2 fills these in
+    products/ plans/ taxes/ discounts/ quotations/ billing/ reports/ portal/
+                        business modules (Member 2, routes thin)
+    subscriptions/ invoices/ payments/
   migrations/           0001-0099 foundation, 0100+ Member 2
 frontend/               placeholder until Frontend Member 1 replaces it
 ```
@@ -124,7 +128,7 @@ See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 | Owner | Scope |
 | --- | --- |
 | Experienced Member 1 | `platform/`, `auth/`, `authz/`, `users/`, `customers/`, `audit/`, `api/`, migrations 0001-0099, Docker |
-| Experienced Member 2 | `products/`, `plans/`, `subscriptions/`, `invoices/`, `payments/`, `taxes/`, `discounts/`, `reports/`, migrations 0100+ |
+| Experienced Member 2 | `products/`, `plans/`, `taxes/`, `discounts/`, `subscriptions/`, `quotations/`, `invoices/`, `payments/`, `billing/`, `reports/`, `portal/`, `platform/money/`, `platform/number/`, migrations 0100+ |
 | Frontend Member 1 | `frontend/` auth, products, plans, customers, subscriptions, portal |
 | Frontend Member 2 | `frontend/` invoices, payments, taxes, discounts, reports |
 
