@@ -1,0 +1,28 @@
+# Production override. Use it together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# `make up-prod` wraps that command. The base file remains the development
+# entry point; this file only tightens what must be different on a server.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for production}
+    restart: always
+
+  api:
+    environment:
+      APP_ENV: production
+      COOKIE_SECURE: "true"
+      # Production must send real mail: password reset is the one mandatory
+      # email and Mailpit is not started outside the `dev` profile.
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST must be set for production}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM must be set for production}
+    restart: always
+
+  frontend:
+    restart: always

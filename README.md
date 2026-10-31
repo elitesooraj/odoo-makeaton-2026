@@ -11,21 +11,23 @@ scaffolded for Member 2 to fill in.
 
 ## Quick start
 
+Docker is the only prerequisite; the host does not need Go, Node or a database
+client.
+
 ```bash
 cp .env.example .env
-make up          # postgres, mailpit, migrations, api
-make seed        # creates admin + finance staff
+make up          # builds images, migrates, starts api, seeds accounts
 ```
 
-The frontend placeholder is optional and starts with
-`docker compose --profile frontend up -d`.
+`make up` runs the `seed` job at the end, so the admin and finance users exist
+on first boot. Re-run `make seed` at any time; it never overwrites a password.
 
 | URL | What |
 | --- | --- |
 | `http://localhost:8080/healthz` | API liveness |
 | `http://localhost:8080/api/v1` | API |
 | `http://localhost:8025` | Mailpit inbox (password reset / verification) |
-| `postgres://localhost:5432/brightloop` | Database (`brightloop` / `brightloop`) |
+| `127.0.0.1:5432` | PostgreSQL (`brightloop` / `brightloop`) |
 
 Seed credentials come from `.env`: `admin@brightloop.test` and
 `finance@brightloop.test`. The finance user is a STAFF account with
@@ -47,6 +49,8 @@ curl -b cookies.txt http://localhost:8080/api/v1/auth/me
   follows: envelopes, errors, pagination, money, IDs, migrations, audit, RBAC.
 - [`docs/api/openapi.yaml`](docs/api/openapi.yaml) — implemented endpoints.
   Member 2 appends new paths to the same file.
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — production deployment, TLS,
+  backups and the hardening checklist.
 - [`docs/adr/`](docs/adr/) — architecture decisions.
 
 ## What exists
@@ -90,13 +94,30 @@ frontend/               placeholder until Frontend Member 1 replaces it
 
 ## Development
 
+Everything runs through Compose. The `tools` profile holds one-shot jobs;
+`dev` holds Mailpit; `frontend` holds the web app.
+
 ```bash
-make test      # unit tests
-make vet       # static checks
-make api-dev   # run the API on the host (needs make db-up + migrated DB)
+make test      # go vet + unit tests inside the build image
+make seed      # create the bootstrap accounts (idempotent)
 make logs      # follow API logs
+make ps        # service status
 make down      # stop, keep the database volume
+make clean     # stop and delete the database volume
+make config    # validate the Compose files
 ```
+
+`make up` starts Postgres, Mailpit, migrations and the API. The optional frontend
+placeholder starts with `make frontend` and is served on `FRONTEND_PORT`.
+
+Production uses the same build system with an override:
+
+```bash
+make up-prod        # hardened settings, no Mailpit, no automatic seed
+make seed-prod      # once
+```
+
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Ownership
 

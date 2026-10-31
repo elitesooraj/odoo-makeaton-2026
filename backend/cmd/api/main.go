@@ -28,6 +28,12 @@ func main() {
 	}
 }
 
+// Set at build time with -ldflags "-X main.version=... -X main.commit=...".
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -82,7 +88,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("api listening", "port", cfg.HTTPPort, "env", cfg.Env)
+		logger.Info("api listening", "port", cfg.HTTPPort, "env", cfg.Env, "version", version, "commit", commit)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}

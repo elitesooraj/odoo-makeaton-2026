@@ -1,5 +1,35 @@
 name: brightloop
 
+# Shared by the API and the one-shot seed job so both see the same database and
+# bootstrap settings.
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-development}
+  HTTP_PORT: "8080"
+  DATABASE_URL: "postgres://${POSTGRES_USER:-brightloop}:${POSTGRES_PASSWORD:-brightloop}@postgres:5432/${POSTGRES_DB:-brightloop}?sslmode=disable"
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
+  SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-bl_session}
+  SESSION_TTL: ${SESSION_TTL:-168h}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: "${SMTP_FROM:-Brightloop <no-reply@brightloop.test>}"
+  ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@brightloop.test}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+  FINANCE_EMAIL: ${FINANCE_EMAIL:-}
+  FINANCE_PASSWORD: ${FINANCE_PASSWORD:-}
+  CURRENCY: ${CURRENCY:-USD}
+  COMPANY_TIMEZONE: ${COMPANY_TIMEZONE:-UTC}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -8,7 +38,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brightloop}
       POSTGRES_DB: ${POSTGRES_DB:-brightloop}
     ports:
-      - "5432:5432"
+      # Bound to loopback: the API, migrations and seed all run inside Compose.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -17,13 +48,16 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
 
   mailpit:
     image: axllent/mailpit:latest
+    profiles: ["dev"]
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
     restart: unless-stopped
+    logging: *default-logging
 
   migrate:
     image: migrate/migrate:v4.18.1
@@ -38,48 +72,68 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    logging: *default-logging
 
   api:
     build:
       context: ./backend
-    environment:
-      APP_ENV: ${APP_ENV:-development}
-      HTTP_PORT: "8080"
-      DATABASE_URL: "postgres://${POSTGRES_USER:-brightloop}:${POSTGRES_PASSWORD:-brightloop}@postgres:5432/${POSTGRES_DB:-brightloop}?sslmode=disable"
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
-      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-bl_session}
-      SESSION_TTL: ${SESSION_TTL:-168h}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      SMTP_HOST: mailpit
-      SMTP_PORT: "1025"
-      SMTP_FROM: "${SMTP_FROM:-Brightloop <no-reply@brightloop.test>}"
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@brightloop.test}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      FINANCE_EMAIL: ${FINANCE_EMAIL:-}
-      FINANCE_PASSWORD: ${FINANCE_PASSWORD:-}
-      CURRENCY: ${CURRENCY:-USD}
-      COMPANY_TIMEZONE: ${COMPANY_TIMEZONE:-UTC}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      target: runtime
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+    image: ${API_IMAGE:-brightloop-api:local}
+    environment: *backend-env
     ports:
-      - "8080:8080"
+      - "${API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      mailpit:
-        condition: service_started
     restart: unless-stopped
+    logging: *default-logging
+
+  # One-shot bootstrap. Run with `make seed`; never started by `up`.
+  seed:
+    build:
+      context: ./backend
+      target: runtime
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+    image: ${API_IMAGE:-brightloop-api:local}
+    entrypoint: ["/app/seed"]
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    profiles: ["tools"]
+    restart: "no"
+    logging: *default-logging
+
+  # Unit tests and static checks inside the build image. Run with `make test`.
+  test:
+    build:
+      context: ./backend
+      target: test
+    image: ${TEST_IMAGE:-brightloop-test:local}
+    profiles: ["tools"]
+    restart: "no"
+    logging: *default-logging
 
   frontend:
     build:
       context: ./frontend
+    image: ${FRONTEND_IMAGE:-brightloop-frontend:local}
     ports:
-      - "5173:80"
+      - "${FRONTEND_PORT:-5173}:80"
     depends_on:
       - api
     profiles: ["frontend"]
+    restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   postgres_data:
