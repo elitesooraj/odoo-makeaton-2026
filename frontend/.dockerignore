@@ -1,6 +1,6 @@
 node_modules
 dist
+.env.local
 .git
-*.log
-.env
-.env.*
+npm-debug.log*
+

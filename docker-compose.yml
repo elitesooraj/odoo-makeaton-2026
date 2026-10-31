@@ -6,7 +6,7 @@ x-backend-env: &backend-env
   APP_ENV: ${APP_ENV:-development}
   HTTP_PORT: "8080"
   DATABASE_URL: "postgres://${POSTGRES_USER:-brightloop}:${POSTGRES_PASSWORD:-brightloop}@postgres:5432/${POSTGRES_DB:-brightloop}?sslmode=disable"
-  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
   APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
   SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-bl_session}
   SESSION_TTL: ${SESSION_TTL:-168h}
@@ -17,9 +17,9 @@ x-backend-env: &backend-env
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_FROM: "${SMTP_FROM:-Brightloop <no-reply@brightloop.test>}"
   ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@brightloop.test}
-  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-  FINANCE_EMAIL: ${FINANCE_EMAIL:-}
-  FINANCE_PASSWORD: ${FINANCE_PASSWORD:-}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-ChangeMe!Now1}
+  FINANCE_EMAIL: ${FINANCE_EMAIL:-finance@brightloop.test}
+  FINANCE_PASSWORD: ${FINANCE_PASSWORD:-Finance!Now1}
   CURRENCY: ${CURRENCY:-USD}
   COMPANY_TIMEZONE: ${COMPANY_TIMEZONE:-UTC}
   LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -43,16 +43,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # Prove TCP readiness, not unix-socket readiness. On first boot the
-      # initdb bootstrap server answers socket probes only, which used to
-      # mark this container healthy before the real TCP listener existed —
-      # the migrate job then raced ahead into "connection refused".
-      # -h 127.0.0.1 forces a TCP probe that passes only after initdb.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
       interval: 5s
       timeout: 3s
       retries: 10
-      # A slow first-boot initdb may fail early probes; don't count them.
       start_period: 10s
     restart: unless-stopped
     logging: *default-logging
@@ -102,9 +96,6 @@ services:
   # Bootstrap: creates the admin (and optional finance staff) once. Runs as
   # part of every `docker compose up` right after migrations; it is idempotent
   # and never overwrites an existing password, so repeat runs are no-ops.
-  # With no ADMIN_PASSWORD set it generates a temporary one and prints it in
-  # the logs (`docker compose logs seed`). Production disables this via
-  # docker-compose.prod.yml; there you run `make seed-prod` once.
   seed:
     build:
       context: ./backend
@@ -123,8 +114,7 @@ services:
     restart: "no"
     logging: *default-logging
 
-  # Disposable database for `make test-integration`. tmpfs keeps it fast and
-  # wipes itself when the container stops; the data never reaches the volume.
+  # Disposable database for `make test-integration`.
   testdb:
     image: postgres:16-alpine
     environment:
@@ -153,6 +143,7 @@ services:
     restart: "no"
     logging: *default-logging
 
+  # React + Vite Frontend served via Nginx reverse proxy on port 5173
   frontend:
     build:
       context: ./frontend
@@ -161,7 +152,6 @@ services:
       - "${FRONTEND_PORT:-5173}:80"
     depends_on:
       - api
-    profiles: ["frontend"]
     restart: unless-stopped
     logging: *default-logging
 

@@ -208,7 +208,7 @@ func buildRouter() *gin.Engine {
 	taxesSvc := taxes.NewService(taxes.NewRepository(pool))
 	discountsSvc := discounts.NewService(discounts.NewRepository(pool))
 
-	subscriptionsSvc := subscriptions.NewService(pool, recorder, api.NewPlanAdapter(plansSvc), nil)
+	subscriptionsSvc := subscriptions.NewService(pool, recorder, api.NewPlanAdapter(plansSvc))
 	invoicesSvc := invoices.NewService(pool, recorder, subscriptionsSvc, discountsSvc, api.NewTaxAdapter(taxesSvc))
 	paymentsSvc := payments.NewService(payments.NewRepository(pool), invoicesSvc.Repo(), recorder)
 	quotationsSvc := quotations.NewService(pool, recorder, subscriptionsSvc, api.NewPlanAdapter(plansSvc))
