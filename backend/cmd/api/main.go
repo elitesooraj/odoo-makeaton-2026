@@ -30,43 +30,7 @@ import (
 	"github.com/brightloop/subscription-platform/backend/internal/subscriptions"
 	"github.com/brightloop/subscription-platform/backend/internal/taxes"
 	"github.com/brightloop/subscription-platform/backend/internal/users"
-	"github.com/google/uuid"
 )
-
-// planAdapter and taxAdapter convert package-specific plan/tax views into the
-// neutral interfaces the subscriptions and invoices services consume.
-type planAdapter struct{ svc *plans.Service }
-
-func (a planAdapter) Get(ctx context.Context, planID uuid.UUID) (*subscriptions.PlanSpec, error) {
-	p, err := a.svc.Get(ctx, planID)
-	if err != nil {
-		return nil, err
-	}
-	return &subscriptions.PlanSpec{
-		ID:              p.ID,
-		ProductID:       p.ProductID,
-		TaxID:           p.TaxID,
-		Name:            p.Name,
-		Interval:        p.Interval,
-		PriceCents:      p.PriceCents,
-		MinimumQuantity: p.MinimumQuantity,
-		AutoClose:       p.AutoClose,
-		AutoRenew:       p.AutoRenew,
-		AllowPause:      p.AllowPause,
-		AllowEarlyClose: p.AllowEarlyClose,
-		IsActive:        p.IsActive,
-	}, nil
-}
-
-type taxAdapter struct{ svc *taxes.Service }
-
-func (a taxAdapter) Get(ctx context.Context, taxID uuid.UUID) (*invoices.TaxDetail, error) {
-	t, err := a.svc.Get(ctx, taxID)
-	if err != nil {
-		return nil, err
-	}
-	return &invoices.TaxDetail{RateBP: t.RateBP, IsInclusive: t.IsInclusive}, nil
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -130,16 +94,16 @@ func run() error {
 	discountsSvc := discounts.NewService(discounts.NewRepository(pool))
 	discountHandler := discounts.NewHandler(discountsSvc)
 
-	subscriptionsSvc := subscriptions.NewService(pool, recorder, planAdapter{plansSvc})
+	subscriptionsSvc := subscriptions.NewService(pool, recorder, api.NewPlanAdapter(plansSvc))
 	subscriptionHandler := subscriptions.NewHandler(subscriptionsSvc)
 
-	invoicesSvc := invoices.NewService(pool, recorder, subscriptionsSvc, discountsSvc, taxAdapter{taxesSvc})
+	invoicesSvc := invoices.NewService(pool, recorder, subscriptionsSvc, discountsSvc, api.NewTaxAdapter(taxesSvc))
 	invoiceHandler := invoices.NewHandler(invoicesSvc)
 
 	paymentsSvc := payments.NewService(payments.NewRepository(pool), invoicesSvc.Repo(), recorder)
 	paymentHandler := payments.NewHandler(paymentsSvc)
 
-	quotationsSvc := quotations.NewService(pool, recorder, subscriptionsSvc, planAdapter{plansSvc})
+	quotationsSvc := quotations.NewService(pool, recorder, subscriptionsSvc, api.NewPlanAdapter(plansSvc))
 	quotationHandler := quotations.NewHandler(quotationsSvc)
 
 	billingSvc := billing.NewService(pool, subscriptionsSvc, invoicesSvc, recorder)

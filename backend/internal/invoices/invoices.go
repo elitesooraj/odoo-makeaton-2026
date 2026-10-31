@@ -727,6 +727,7 @@ func (s *Service) finalize(ctx context.Context, q db.Querier, inv *Invoice, draf
 				exclusiveTax += tax
 			}
 		}
+		taxTotal += tax
 		drafts[i].LineTotalCents = lineTotal
 		drafts[i].TaxCents = tax
 	}

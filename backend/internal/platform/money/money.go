@@ -63,7 +63,11 @@ func Allocate(amount int64, weights []int64) []int64 {
 	return out
 }
 
-// AddInterval advances a date by one billing interval.
+// AddInterval advances a date by one billing interval. Note: like Go's
+// AddDate it normalizes overflow instead of clamping to the month end, so
+// Jan 31 + MONTHLY lands on March 3 and month-end starts drift forward.
+// See money_test.go for the documented cases; clamping is a product
+// decision left to the module owner.
 func AddInterval(t time.Time, interval string) time.Time {
 	switch interval {
 	case "DAILY":
