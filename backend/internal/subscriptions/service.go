@@ -22,13 +22,18 @@ import (
 )
 
 type Service struct {
-	repo  *Repository
-	audit *audit.Recorder
-	plans PlanLoader
+	repo      *Repository
+	audit     *audit.Recorder
+	plans     PlanLoader
+	customers CustomerLoader
 }
 
-func NewService(pool *pgxpool.Pool, recorder *audit.Recorder, plans PlanLoader) *Service {
-	return &Service{repo: NewRepository(pool), audit: recorder, plans: plans}
+func NewService(pool *pgxpool.Pool, recorder *audit.Recorder, plans PlanLoader, customers CustomerLoader) *Service {
+	repo := NewRepository(pool)
+	if customers == nil {
+		customers = repo // default: check against the database directly
+	}
+	return &Service{repo: repo, audit: recorder, plans: plans, customers: customers}
 }
 
 // Repo exposes the repository for the billing worker and the portal.
@@ -103,7 +108,7 @@ func (s *Service) Create(ctx context.Context, actor *auth.Actor, meta audit.Meta
 		return nil, httpx.Validation(details)
 	}
 
-	if ok, err := s.repo.CustomerExists(ctx, s.repo.pool, customerID); err != nil {
+	if ok, err := s.customers.Exists(ctx, customerID); err != nil {
 		return nil, err
 	} else if !ok {
 		return nil, httpx.Validation(map[string]string{"customer_id": "customer not found"})

@@ -234,6 +234,11 @@ func (r *Repository) DeleteLine(ctx context.Context, q db.Querier, subscriptionI
 	return nil
 }
 
+// Exists implements CustomerLoader by delegating to the repository.
+func (r *Repository) Exists(ctx context.Context, customerID uuid.UUID) (bool, error) {
+	return r.CustomerExists(ctx, r.pool, customerID)
+}
+
 func (r *Repository) CustomerExists(ctx context.Context, q db.Querier, customerID uuid.UUID) (bool, error) {
 	var ok bool
 	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM customers WHERE id = $1)`, customerID).Scan(&ok)

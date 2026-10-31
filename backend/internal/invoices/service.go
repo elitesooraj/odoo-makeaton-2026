@@ -26,7 +26,7 @@ type Service struct {
 	repo      *Repository
 	audit     *audit.Recorder
 	subs      *subscriptions.Service
-	discounts *discounts.Service
+	discounts DiscountLoader
 	taxes     TaxLoader
 }
 
@@ -34,7 +34,7 @@ type Service struct {
 func (s *Service) Repo() *Repository { return s.repo }
 
 func NewService(pool *pgxpool.Pool, recorder *audit.Recorder, subs *subscriptions.Service,
-	disc *discounts.Service, taxes TaxLoader) *Service {
+	disc DiscountLoader, taxes TaxLoader) *Service {
 	return &Service{
 		repo:      NewRepository(pool),
 		audit:     recorder,

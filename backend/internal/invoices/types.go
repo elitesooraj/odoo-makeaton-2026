@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/brightloop/subscription-platform/backend/internal/discounts"
+	"github.com/brightloop/subscription-platform/backend/internal/platform/db"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/pagination"
 )
 
@@ -78,6 +80,13 @@ type TaxDetail struct {
 
 type TaxLoader interface {
 	Get(ctx context.Context, taxID uuid.UUID) (*TaxDetail, error)
+}
+
+// DiscountLoader resolves and applies discount rules. Implemented by
+// discounts.Service; the interface keeps invoice finalization testable.
+type DiscountLoader interface {
+	CheckForSubscription(ctx context.Context, discountID uuid.UUID, at time.Time, subtotal int64, quantity int, productIDs []uuid.UUID) (*discounts.Discount, error)
+	IncrementUsed(ctx context.Context, q db.Querier, discountID uuid.UUID) error
 }
 
 type LineInput struct {

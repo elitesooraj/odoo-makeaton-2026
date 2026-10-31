@@ -38,7 +38,13 @@ type PlanFlags struct {
 	IsActive        bool
 }
 
-// PlanLoader is satisfied by plans.Service.
+// CustomerLoader is satisfied by the customers.Repository (via the adapter
+// in main) and keeps subscription creation testable without a database.
+type CustomerLoader interface {
+	Exists(ctx context.Context, customerID uuid.UUID) (bool, error)
+}
+
+// PlanLoader is satisfied by plans.Service (via the adapter in main).
 type PlanLoader interface {
 	Get(ctx context.Context, planID uuid.UUID) (*PlanSpec, error)
 }
