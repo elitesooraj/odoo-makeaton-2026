@@ -1,6 +1,20 @@
-# Placeholder frontend image so `docker compose --profile frontend up` works
-# before the real app exists. Frontend Member 1 replaces this directory with
-# the Vite + React + TypeScript application and updates this Dockerfile.
+# Stage 1: Build Vite React SPA
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve with Nginx
 FROM nginx:1.27-alpine
 
-COPY index.html /usr/share/nginx/html/index.html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
