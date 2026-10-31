@@ -257,7 +257,31 @@ Add the permission to `authz.Catalog` **and** a new migration that inserts it
 into `permissions` and `role_permissions`. The catalog is code-owned; the seed
 migration is its database mirror.
 
-## 11. Testing
+## 11. Build and run
+
+Docker Compose is the build system. Do not document or rely on a host Go or Node
+toolchain.
+
+```bash
+docker compose up -d --build   # everything: postgres, migrations, seed, api, mailpit
+make up        # the same, wrapped
+make build     # images only
+make test      # go vet + go test in the test stage
+make logs      # api logs
+make config    # validate Compose
+```
+
+- `backend/Dockerfile` has `deps`, `test`, `build` and `runtime` stages. The
+  runtime image is non-root and ships CA certificates and `tzdata`.
+- `api` and `seed` share the same image; `seed` is a one-shot under the `tools`
+  profile.
+- Long-running services never run migrations themselves. The `migrate` service
+  must exit 0 before `api` starts.
+- Production adds `docker-compose.prod.yml`. It forces `APP_ENV=production`,
+  secure cookies and real SMTP, and keeps Mailpit out.
+- All state is in the `postgres_data` volume. `make clean` deletes it.
+
+## 12. Testing
 
 - Pure unit tests for validation, money, tax, discount and state machines.
 - Integration tests use the Compose Postgres; never mock the database for
@@ -266,7 +290,7 @@ migration is its database mirror.
   admin endpoint, a customer denied another customer's invoice).
 - `make test` must pass before merging.
 
-## 12. Frontend contract
+## 13. Frontend contract
 
 - `fetch(..., { credentials: 'include' })` on every call.
 - Bootstrap the session from `GET /auth/me`: it returns the user and the

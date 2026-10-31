@@ -1,5 +1,10 @@
 .git
+.gitignore
 bin
 *.log
 .env
+.env.*
+coverage.out
+Dockerfile
+.dockerignore
 README.md
