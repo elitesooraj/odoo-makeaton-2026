@@ -1,0 +1,85 @@
+name: brightloop
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-brightloop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-brightloop}
+      POSTGRES_DB: ${POSTGRES_DB:-brightloop}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-brightloop} -d ${POSTGRES_DB:-brightloop}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    restart: unless-stopped
+
+  migrate:
+    image: migrate/migrate:v4.18.1
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database"
+      - "postgres://${POSTGRES_USER:-brightloop}:${POSTGRES_PASSWORD:-brightloop}@postgres:5432/${POSTGRES_DB:-brightloop}?sslmode=disable"
+      - "up"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      HTTP_PORT: "8080"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-brightloop}:${POSTGRES_PASSWORD:-brightloop}@postgres:5432/${POSTGRES_DB:-brightloop}?sslmode=disable"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-bl_session}
+      SESSION_TTL: ${SESSION_TTL:-168h}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM: "${SMTP_FROM:-Brightloop <no-reply@brightloop.test>}"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@brightloop.test}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      FINANCE_EMAIL: ${FINANCE_EMAIL:-}
+      FINANCE_PASSWORD: ${FINANCE_PASSWORD:-}
+      CURRENCY: ${CURRENCY:-USD}
+      COMPANY_TIMEZONE: ${COMPANY_TIMEZONE:-UTC}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    profiles: ["frontend"]
+
+volumes:
+  postgres_data:
