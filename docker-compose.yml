@@ -6,7 +6,7 @@ x-backend-env: &backend-env
   APP_ENV: ${APP_ENV:-development}
   HTTP_PORT: "8080"
   DATABASE_URL: "postgres://${POSTGRES_USER:-brightloop}:${POSTGRES_PASSWORD:-brightloop}@postgres:5432/${POSTGRES_DB:-brightloop}?sslmode=disable"
-  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
   APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
   SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-bl_session}
   SESSION_TTL: ${SESSION_TTL:-168h}
@@ -161,7 +161,6 @@ services:
       - "${FRONTEND_PORT:-5173}:80"
     depends_on:
       - api
-    profiles: ["frontend"]
     restart: unless-stopped
     logging: *default-logging
 
