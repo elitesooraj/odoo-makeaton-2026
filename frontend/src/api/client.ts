@@ -18,29 +18,6 @@ export class ApiException extends Error {
   }
 }
 
-export function isOfflineError(err: unknown): boolean {
-  if (err instanceof TypeError) return true;
-  if (err instanceof ApiException) {
-    if (err.code === 'BACKEND_OFFLINE') return true;
-    if (err.status === 500 || err.status === 502 || err.status === 503 || err.status === 504) {
-      return true;
-    }
-  }
-  if (err instanceof Error) {
-    const msg = err.message.toLowerCase();
-    if (
-      msg.includes('fetch') ||
-      msg.includes('econnrefused') ||
-      msg.includes('failed to fetch') ||
-      msg.includes('network') ||
-      msg.includes('proxy error')
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 interface RequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined | null>;
 }
@@ -94,21 +71,19 @@ export async function request<T>(
   }
 
   if (!response.ok) {
-    const isProxyDown =
-      response.status >= 500 &&
-      (rawText.includes('ECONNREFUSED') || rawText.includes('proxy error') || !body);
-
     const errorBody: ApiError['error'] = body?.error || {
-      code: isProxyDown
-        ? 'BACKEND_OFFLINE'
-        : response.status === 401
+      code: response.status === 401
         ? 'UNAUTHENTICATED'
         : response.status === 403
         ? 'FORBIDDEN'
+        : response.status === 404
+        ? 'NOT_FOUND'
+        : response.status === 409
+        ? 'CONFLICT'
+        : response.status === 422
+        ? 'VALIDATION_FAILED'
         : 'INTERNAL',
-      message: isProxyDown
-        ? 'Backend API is currently offline on port 8080'
-        : body?.message || response.statusText || 'Request failed',
+      message: body?.message || response.statusText || 'Request failed',
       request_id: '',
     };
     throw new ApiException(response.status, errorBody);

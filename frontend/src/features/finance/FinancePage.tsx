@@ -225,8 +225,6 @@ export function FinancePage() {
 
       await paymentsApi.record({
         invoice_id: payInvoiceId,
-        invoice_number: inv?.number,
-        customer_name: inv?.customer_name,
         method: payMethod,
         amount_cents: amountCents,
         note: payNote,
@@ -982,3 +980,4 @@ export function FinancePage() {
     </div>
   );
 }
+
