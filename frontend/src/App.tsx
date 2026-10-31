@@ -9,7 +9,10 @@ import { CatalogPage } from '@/features/catalog/CatalogPage';
 import { SubscriptionsPage } from '@/features/subscriptions/SubscriptionsPage';
 import { CustomerPortalPage } from '@/features/portal/CustomerPortalPage';
 import { UsersPage } from '@/features/users/UsersPage';
-import { FinancePlaceholderPage } from '@/features/finance/FinancePlaceholderPage';
+import { InvoicesPage } from '@/features/finance/InvoicesPage';
+import { TaxesPage } from '@/features/finance/TaxesPage';
+import { DiscountsPage } from '@/features/finance/DiscountsPage';
+import { ReportsPage } from '@/features/finance/ReportsPage';
 
 function AppContent() {
   const { user, loading, isAuthenticated, isCustomer } = useAuth();
@@ -54,10 +57,10 @@ function AppContent() {
       {(activeNav === 'products' || activeNav === 'plans') && <CatalogPage />}
       {(activeNav === 'subscriptions' || activeNav === 'quotations') && <SubscriptionsPage />}
       {activeNav === 'users' && <UsersPage />}
-      {(activeNav === 'invoices' ||
-        activeNav === 'taxes' ||
-        activeNav === 'discounts' ||
-        activeNav === 'reports') && <FinancePlaceholderPage domain={activeNav} />}
+      {activeNav === 'invoices' && <InvoicesPage />}
+      {activeNav === 'taxes' && <TaxesPage />}
+      {activeNav === 'discounts' && <DiscountsPage />}
+      {activeNav === 'reports' && <ReportsPage />}
     </AppLayout>
   );
 }
