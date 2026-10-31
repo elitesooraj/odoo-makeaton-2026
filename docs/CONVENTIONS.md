@@ -263,7 +263,8 @@ Docker Compose is the build system. Do not document or rely on a host Go or Node
 toolchain.
 
 ```bash
-make up        # build + start dev stack, then seed
+docker compose up -d --build   # everything: postgres, migrations, seed, api, mailpit
+make up        # the same, wrapped
 make build     # images only
 make test      # go vet + go test in the test stage
 make logs      # api logs

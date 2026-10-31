@@ -4,6 +4,10 @@
 #
 # `make up-prod` wraps that command. The base file remains the development
 # entry point; this file only tightens what must be different on a server.
+#
+# The two profile blocks below remove development conveniences from the
+# default model: `profiles` merge by appending, so re-declaring them here
+# takes mailpit and seed out of the always-on set for this stack.
 
 services:
   postgres:
@@ -16,7 +20,7 @@ services:
       APP_ENV: production
       COOKIE_SECURE: "true"
       # Production must send real mail: password reset is the one mandatory
-      # email and Mailpit is not started outside the `dev` profile.
+      # email and Mailpit is not started with this override.
       SMTP_HOST: ${SMTP_HOST:?SMTP_HOST must be set for production}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -26,3 +30,12 @@ services:
 
   frontend:
     restart: always
+
+  # Dev-only mail catcher: hidden from production `up`.
+  mailpit:
+    profiles: ["dev"]
+
+  # Production seeds deliberately and exactly once: `make seed-prod`.
+  # It never auto-creates an account on a server boot.
+  seed:
+    profiles: ["tools"]

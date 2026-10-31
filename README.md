@@ -14,15 +14,21 @@ all routes implemented and smoke-tested, documented in
 ## Quick start
 
 Docker is the only prerequisite; the host does not need Go, Node or a database
-client.
+client. One command does everything — Postgres, migrations, seed, API, Mailpit:
 
 ```bash
 cp .env.example .env
-make up          # builds images, migrates, starts api, seeds accounts
+docker compose up -d --build
 ```
 
-`make up` runs the `seed` job at the end, so the admin and finance users exist
-on first boot. Re-run `make seed` at any time; it never overwrites a password.
+`docker compose up` also runs the `migrate` and `seed` one-shots before the API
+starts (they exit when done; `docker compose ps` shows them as exited, which is
+expected). The seed is idempotent: first boot on a fresh volume creates the
+admin and finance users from `.env`, later boots see them and leave them
+untouched. It never overwrites a password.
+
+The `make` targets are thin wrappers around the same Compose commands:
+`make up` = the two steps above, `make seed` re-runs the seed manually.
 
 | URL | What |
 | --- | --- |
@@ -34,6 +40,14 @@ on first boot. Re-run `make seed` at any time; it never overwrites a password.
 Seed credentials come from `.env`: `admin@brightloop.test` and
 `finance@brightloop.test`. The finance user is a STAFF account with
 `invoices.write` and `payments.write` granted explicitly.
+
+**Why seed at all?** `/auth/register` only ever creates CUSTOMER (portal)
+accounts — self-service sign-up can never mint back-office roles, or anyone
+could sign up and become admin. Only an admin can create staff, so the *first*
+admin must come from outside the request path: that is the seed job's one job.
+Once the frontend is ready, customers self-register via the UI and staff are
+created from the admin area — the seed still runs on every boot, but after the
+first it changes nothing.
 
 ```bash
 curl -i -c cookies.txt -X POST http://localhost:8080/api/v1/auth/login \
@@ -98,12 +112,13 @@ frontend/               placeholder until Frontend Member 1 replaces it
 
 ## Development
 
-Everything runs through Compose. The `tools` profile holds one-shot jobs;
-`dev` holds Mailpit; `frontend` holds the web app.
+Everything runs through Compose. Plain `docker compose up` starts postgres,
+migrations, seed, api and mailpit; the `test` job sits behind the `tools`
+profile and the frontend behind `frontend`.
 
 ```bash
 make test      # go vet + unit tests inside the build image
-make seed      # create the bootstrap accounts (idempotent)
+make seed      # re-run the idempotent seed job manually
 make logs      # follow API logs
 make ps        # service status
 make down      # stop, keep the database volume
@@ -111,8 +126,8 @@ make clean     # stop and delete the database volume
 make config    # validate the Compose files
 ```
 
-`make up` starts Postgres, Mailpit, migrations and the API. The optional frontend
-placeholder starts with `make frontend` and is served on `FRONTEND_PORT`.
+`make up` is `docker compose up -d --build`. The optional frontend placeholder
+starts with `make frontend` and is served on `FRONTEND_PORT`.
 
 Production uses the same build system with an override:
 

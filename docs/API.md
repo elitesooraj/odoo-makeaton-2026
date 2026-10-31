@@ -217,6 +217,10 @@ portal route is scoped by the actor's `customer_id`; foreign resources return
 
 ## Seeded accounts & curl quickstart
 
+With the Compose stack, the admin account is created automatically by the seed
+job on the first `docker compose up` (idempotent afterwards). Customers
+self-register.
+
 ```bash
 # admin
 curl -s -c admin.jar -X POST http://localhost:8080/api/v1/auth/login \
