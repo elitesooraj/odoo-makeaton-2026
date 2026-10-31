@@ -22,6 +22,17 @@ tags:
   - name: Users
   - name: Customers
   - name: Permissions
+  - name: Products
+  - name: Plans
+  - name: Taxes
+  - name: Discounts
+  - name: Subscriptions
+  - name: Quotations
+  - name: Invoices
+  - name: Payments
+  - name: Billing
+  - name: Reports
+  - name: Portal
 
 security:
   - cookieAuth: []
@@ -398,6 +409,733 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /products:
+    get:
+      tags: [Products]
+      summary: List products
+      description: Permission `products.read`. Filters `search`, `is_active`.
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - { name: is_active, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Product list
+    post:
+      tags: [Products]
+      summary: Create a product
+      description: Permission `products.write`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                tax_id: { type: string, format: uuid, nullable: true }
+                is_active: { type: boolean, default: true }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /products/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Products]
+      summary: Get a product
+      responses:
+        '200': { description: Product with variants }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Products]
+      summary: Update a product
+      description: Permission `products.write`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                tax_id: { type: string, format: uuid, nullable: true }
+                is_active: { type: boolean }
+      responses:
+        '200': { description: Updated product }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Products]
+      summary: Deactivate a product
+      responses:
+        '200': { description: Product marked inactive }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /products/{id}/variants:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Products]
+      summary: Add a variant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                sku: { type: string }
+                price_over_cents: { type: integer }
+                is_active: { type: boolean, default: true }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /products/{id}/variants/{variant_id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: variant_id, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Products]
+      summary: Update a variant
+      responses:
+        '200': { description: Updated variant }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Products]
+      summary: Deactivate a variant
+      responses:
+        '200': { description: Variant marked inactive }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /plans:
+    get:
+      tags: [Plans]
+      summary: List plans
+      description: Permission `plans.read`. Filters `product_id`, `is_active`, `search`.
+      parameters:
+        - { name: product_id, in: query, schema: { type: string, format: uuid } }
+        - { name: is_active, in: query, schema: { type: boolean } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Plan list }
+    post:
+      tags: [Plans]
+      summary: Create a plan
+      description: Permission `plans.write`. `interval` is DAILY, WEEKLY, MONTHLY or YEARLY.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id, name, interval, price_cents]
+              properties:
+                product_id: { type: string, format: uuid }
+                name: { type: string }
+                interval: { type: string, enum: [DAILY, WEEKLY, MONTHLY, YEARLY] }
+                price_cents: { type: integer, format: int64 }
+                minimum_quantity: { type: integer, default: 1 }
+                formula: { type: string, default: FLAT }
+                tax_id: { type: string, format: uuid, nullable: true }
+                start_months: { type: integer, default: 0 }
+                auto_renew: { type: boolean, default: true }
+                auto_close: { type: boolean, default: false }
+                allow_pause: { type: boolean, default: true }
+                allow_early_close: { type: boolean, default: true }
+                is_active: { type: boolean, default: true }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /plans/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Plans]
+      summary: Get a plan
+      responses:
+        '200': { description: Plan }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Plans]
+      summary: Update a plan
+      responses:
+        '200': { description: Updated plan }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Plans]
+      summary: Deactivate a plan
+      responses:
+        '200': { description: Plan marked inactive }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /taxes:
+    get:
+      tags: [Taxes]
+      summary: List tax rules
+      description: Permission `taxes.read`.
+      responses:
+        '200': { description: Tax list }
+    post:
+      tags: [Taxes]
+      summary: Create a tax rule
+      description: '`rate_bp` is basis points (1800 = 18%). Exclusive taxes top up
+        line totals; inclusive taxes are carved out.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, rate_bp]
+              properties:
+                name: { type: string }
+                rate_bp: { type: integer, example: 1800 }
+                is_inclusive: { type: boolean, default: false }
+                is_active: { type: boolean, default: true }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /taxes/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Taxes]
+      summary: Get a tax rule
+      responses:
+        '200': { description: Tax rule }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Taxes]
+      summary: Update a tax rule
+      responses:
+        '200': { description: Updated tax rule }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Taxes]
+      summary: Deactivate a tax rule
+      responses:
+        '200': { description: Tax rule marked inactive }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /discounts:
+    get:
+      tags: [Discounts]
+      summary: List discount rules
+      description: Permission `discounts.read`.
+      responses:
+        '200': { description: Discount list }
+    post:
+      tags: [Discounts]
+      summary: Create a discount rule
+      description: '`kind` PERCENT uses `value_bp` (1000 = 10%); FIXED uses `amount_cents`.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, kind]
+              properties:
+                name: { type: string }
+                kind: { type: string, enum: [PERCENT, FIXED] }
+                value_bp: { type: integer }
+                amount_cents: { type: integer, format: int64 }
+                is_active: { type: boolean, default: true }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /discounts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Discounts]
+      summary: Get a discount rule
+      responses:
+        '200': { description: Discount rule }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Discounts]
+      summary: Update a discount rule
+      responses:
+        '200': { description: Updated discount rule }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Discounts]
+      summary: Deactivate a discount rule
+      responses:
+        '200': { description: Discount rule marked inactive }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /subscriptions:
+    get:
+      tags: [Subscriptions]
+      summary: List subscriptions
+      description: Permission `subscriptions.read`. Filters `customer_id`, `plan_id`, `status`, `search`.
+      parameters:
+        - { name: customer_id, in: query, schema: { type: string, format: uuid } }
+        - { name: plan_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, QUOTATION, CONFIRMED, ACTIVE, PAUSED, CLOSED] } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Subscription list }
+    post:
+      tags: [Subscriptions]
+      summary: Create a subscription (DRAFT or QUOTATION)
+      description: Permission `subscriptions.write`. Lifecycle
+        DRAFT -> QUOTATION -> CONFIRMED -> ACTIVE -> PAUSED/CLOSED. Lines are
+        editable only in DRAFT/QUOTATION.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id, plan_id]
+              properties:
+                customer_id: { type: string, format: uuid }
+                plan_id: { type: string, format: uuid }
+                status: { type: string, enum: [DRAFT, QUOTATION], default: DRAFT }
+                start_date: { type: string, format: date }
+                expiry_date: { type: string, format: date, nullable: true }
+                payment_terms_days: { type: integer, default: 30 }
+                quantity: { type: integer, default: 1 }
+                discount_id: { type: string, format: uuid, nullable: true }
+                notes: { type: string }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /subscriptions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Subscriptions]
+      summary: Get a subscription with lines
+      responses:
+        '200': { description: Subscription }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Subscriptions]
+      summary: Update a subscription (DRAFT/QUOTATION only)
+      responses:
+        '200': { description: Updated subscription }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/confirm:
+    post:
+      tags: [Subscriptions]
+      summary: Confirm (QUOTATION -> CONFIRMED)
+      responses:
+        '200': { description: Subscription in CONFIRMED }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/activate:
+    post:
+      tags: [Subscriptions]
+      summary: Activate (sets next_billing_date, ACTIVE)
+      responses:
+        '200': { description: Subscription ACTIVE }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/pause:
+    post:
+      tags: [Subscriptions]
+      summary: Pause (plan must allow_pause)
+      responses:
+        '200': { description: Subscription PAUSED }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/resume:
+    post:
+      tags: [Subscriptions]
+      summary: Resume (recomputes next_billing_date)
+      responses:
+        '200': { description: Subscription ACTIVE }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/close:
+    post:
+      tags: [Subscriptions]
+      summary: Close a subscription
+      responses:
+        '200': { description: Subscription CLOSED }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/lines:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Subscriptions]
+      summary: Add a line (DRAFT/QUOTATION only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionLineInput' }
+      responses:
+        '200': { description: Subscription with the new line }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /subscriptions/{id}/lines/{line_id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: line_id, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Subscriptions]
+      summary: Update a line
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionLineInput' }
+      responses:
+        '200': { description: Subscription with the updated line }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [Subscriptions]
+      summary: Remove a line
+      responses:
+        '200': { description: Subscription without the line }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /quotations/templates:
+    get:
+      tags: [Quotations]
+      summary: List quotation templates
+      description: Permission `subscriptions.read`.
+      responses:
+        '200': { description: Template list }
+    post:
+      tags: [Quotations]
+      summary: Create a quotation template
+      description: Permission `subscriptions.write`. A template is a reusable line
+        set; instantiating it creates a subscription in QUOTATION status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, lines]
+              properties:
+                name: { type: string }
+                validity_days: { type: integer, default: 30 }
+                notes: { type: string }
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    required: [plan_id]
+                    properties:
+                      plan_id: { type: string, format: uuid }
+                      quantity: { type: integer, default: 1 }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /quotations/templates/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Quotations]
+      summary: Get a template with lines
+      responses:
+        '200': { description: Template }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Quotations]
+      summary: Update a template
+      responses:
+        '200': { description: Updated template }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Quotations]
+      summary: Deactivate a template
+      responses:
+        '200': { description: Template marked inactive }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /quotations/templates/{id}/instantiate:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Quotations]
+      summary: Expand a template into a QUOTATION subscription
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /invoices:
+    get:
+      tags: [Invoices]
+      summary: List invoices
+      description: Permission `invoices.read`. Filters `customer_id`, `subscription_id`, `status`, `search`.
+      parameters:
+        - { name: customer_id, in: query, schema: { type: string, format: uuid } }
+        - { name: subscription_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, CONFIRMED, CANCELLED, PAID] } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Invoice list }
+    post:
+      tags: [Invoices]
+      summary: Create a DRAFT invoice
+      description: Permission `invoices.write`. Either `subscription_id` (snapshot
+        the subscription lines) or explicit `lines` — never both.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id]
+              properties:
+                customer_id: { type: string, format: uuid }
+                subscription_id: { type: string, format: uuid, nullable: true }
+                issue_date: { type: string, format: date }
+                due_date: { type: string, format: date }
+                period_start: { type: string, format: date }
+                period_end: { type: string, format: date }
+                discount_id: { type: string, format: uuid, nullable: true }
+                notes: { type: string }
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    required: [description, quantity, unit_price_cents]
+                    properties:
+                      description: { type: string }
+                      quantity: { type: integer }
+                      unit_price_cents: { type: integer, format: int64 }
+                      tax_id: { type: string, format: uuid, nullable: true }
+      responses:
+        '201': { $ref: '#/components/responses/Created' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /invoices/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Invoices]
+      summary: Get an invoice with lines and balance
+      responses:
+        '200': { description: Invoice }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Invoices]
+      summary: Update a DRAFT invoice
+      responses:
+        '200': { description: Updated invoice }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /invoices/{id}/confirm:
+    post:
+      tags: [Invoices]
+      summary: Confirm (DRAFT -> CONFIRMED, locks totals, gets number)
+      responses:
+        '200': { description: Confirmed invoice }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /invoices/{id}/cancel:
+    post:
+      tags: [Invoices]
+      summary: Cancel an unpaid invoice
+      responses:
+        '200': { description: Cancelled invoice }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /invoices/{id}/send:
+    post:
+      tags: [Invoices]
+      summary: Email the invoice to the customer
+      responses:
+        '200': { description: Send accepted }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /payments:
+    get:
+      tags: [Payments]
+      summary: List payments
+      description: Permission `payments.read`. Filters `invoice_id`, `customer_id`, `method`, `from`, `to`.
+      parameters:
+        - { name: invoice_id, in: query, schema: { type: string, format: uuid } }
+        - { name: customer_id, in: query, schema: { type: string, format: uuid } }
+        - { name: method, in: query, schema: { type: string, enum: [CASH, CARD, BANK, UPI, OTHER] } }
+      responses:
+        '200': { description: Payment list }
+    post:
+      tags: [Payments]
+      summary: Record a payment (returns the updated invoice)
+      description: Permission `payments.write`. The invoice must be CONFIRMED and
+        underpaid; PAID is derived when the balance reaches zero.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invoice_id, amount_cents, method]
+              properties:
+                invoice_id: { type: string, format: uuid }
+                amount_cents: { type: integer, format: int64 }
+                method: { type: string, enum: [CASH, CARD, BANK, UPI, OTHER] }
+                paid_at: { type: string, format: date-time }
+                reference: { type: string }
+      responses:
+        '201':
+          description: Payment recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      payment: { type: object }
+                      invoice: { type: object }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /payments/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Payments]
+      summary: Get a payment
+      responses:
+        '200': { description: Payment }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /billing/run:
+    post:
+      tags: [Billing]
+      summary: Run the recurring billing cycle
+      description: Permission `subscriptions.write`. Bills every ACTIVE
+        subscription with a due next_billing_date. Idempotent; overlaps return 409.
+      responses:
+        '200':
+          description: Run summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      as_of: { type: string, format: date-time }
+                      billed: { type: integer }
+                      skipped: { type: integer }
+                      closed: { type: integer }
+                      failed: { type: integer }
+                      invoices:
+                        type: array
+                        items: { type: string, format: uuid }
+                      results:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            subscription_id: { type: string, format: uuid }
+                            period_start: { type: string, format: date-time }
+                            period_end: { type: string, format: date-time }
+                            invoice_id: { type: string, format: uuid, nullable: true }
+                            status: { type: string, enum: [CREATED, SKIPPED, CLOSED, FAILED] }
+                            detail: { type: string }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /reports/summary:
+    get:
+      tags: [Reports]
+      summary: Dashboard summary
+      description: Permission `reports.read`. MRR is approximate (yearly / 12,
+        weekly x 52/12, daily x 30).
+      responses:
+        '200': { description: Summary counts and money figures }
+
+  /reports/revenue:
+    get:
+      tags: [Reports]
+      summary: Paid vs invoiced revenue by month
+      parameters:
+        - { name: months, in: query, schema: { type: integer, default: 12, minimum: 1, maximum: 24 } }
+      responses:
+        '200': { description: Series of month, paid_cents, invoiced_cents }
+
+  /reports/subscriptions:
+    get:
+      tags: [Reports]
+      summary: Subscription counts by status
+      responses:
+        '200': { description: Array of status and count pairs }
+
+  /reports/overdue:
+    get:
+      tags: [Reports]
+      summary: Overdue invoices (confirmed, past due, balance > 0)
+      responses:
+        '200': { description: List of overdue invoices }
+
+  /portal/me:
+    get:
+      tags: [Portal]
+      summary: Logged-in customer landing data (read-only, role CUSTOMER)
+      description: Counts of own subscriptions, active ones, invoices and unpaid invoices.
+      responses:
+        '200': { description: Profile counts }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /portal/subscriptions:
+    get:
+      tags: [Portal]
+      summary: Own subscriptions
+      responses:
+        '200': { description: Paginated subscription list }
+
+  /portal/subscriptions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Portal]
+      summary: Own subscription
+      responses:
+        '200': { description: Subscription }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /portal/invoices:
+    get:
+      tags: [Portal]
+      summary: Own invoices
+      responses:
+        '200': { description: Paginated invoice list }
+
+  /portal/invoices/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Portal]
+      summary: Own invoice
+      responses:
+        '200': { description: Invoice }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /portal/payments:
+    get:
+      tags: [Portal]
+      summary: Own payment history
+      responses:
+        '200': { description: Paginated payment list }
+
 components:
   securitySchemes:
     cookieAuth:
@@ -433,6 +1171,11 @@ components:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Unauthenticated:
       description: No valid session
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Created:
+      description: Resource created; returns the record in `data`
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
@@ -682,3 +1425,14 @@ components:
         tax_id: { type: string }
         notes: { type: string }
         status: { type: string, enum: [ACTIVE, INACTIVE] }
+
+    SubscriptionLineInput:
+      type: object
+      required: [product_id]
+      properties:
+        product_id: { type: string, format: uuid }
+        variant_id: { type: string, format: uuid, nullable: true }
+        description: { type: string }
+        quantity: { type: integer, default: 1 }
+        unit_price_cents: { type: integer, format: int64 }
+        tax_id: { type: string, format: uuid, nullable: true }

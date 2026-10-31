@@ -1,11 +1,11 @@
 import * as React from 'react';
-import { FileText, Receipt, Shield, LogOut, KeyRound } from 'lucide-react';
+import { FileText, Receipt, Shield, LogOut, KeyRound, DollarSign, UserCheck } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { EmailVerificationBanner } from '@/components/auth/EmailVerificationBanner';
 import { ChangePasswordModal } from '@/components/auth/ChangePasswordModal';
 import { Button } from '@/components/ui/button';
 
-export type PortalTab = 'subscriptions' | 'invoices' | 'security';
+export type PortalTab = 'subscriptions' | 'invoices' | 'payments' | 'security' | 'profile';
 
 interface Props {
   activeTab: PortalTab;
@@ -66,56 +66,72 @@ export function PortalLayout({ activeTab, onTabChange, children }: Props) {
                 }`}
               >
                 <Receipt className="h-3.5 w-3.5" />
-                Invoices & Billing
+                Invoices
               </button>
 
               <button
-                onClick={() => onTabChange('security')}
+                onClick={() => onTabChange('payments')}
                 className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                  activeTab === 'security'
+                  activeTab === 'payments'
                     ? 'bg-primary text-primary-foreground shadow-sm'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`}
               >
-                <Shield className="h-3.5 w-3.5" />
-                Account Security
+                <DollarSign className="h-3.5 w-3.5" />
+                Payments
+              </button>
+
+              <button
+                onClick={() => onTabChange('profile')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  activeTab === 'profile'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                <UserCheck className="h-3.5 w-3.5" />
+                Account Profile
               </button>
             </nav>
           </div>
 
-          {/* Right User Bar */}
           <div className="flex items-center gap-3">
-            <div className="text-right hidden sm:block">
-              <div className="text-xs font-medium">{user?.full_name || user?.email}</div>
-              <div className="text-[10px] text-muted-foreground font-mono">{user?.email}</div>
-            </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs h-8"
-              onClick={() => setChangePasswordOpen(true)}
-            >
-              <KeyRound className="h-3.5 w-3.5 mr-1" /> Password
-            </Button>
+            <span className="text-xs text-muted-foreground hidden sm:inline">
+              {user?.full_name || user?.email}
+            </span>
 
             <Button
               variant="ghost"
               size="sm"
-              className="text-xs h-8 text-muted-foreground hover:text-destructive"
-              onClick={logout}
+              onClick={() => setChangePasswordOpen(true)}
+              className="text-xs cursor-pointer h-8"
+              title="Change Password"
             >
-              <LogOut className="h-4 w-4" />
+              <KeyRound className="h-3.5 w-3.5 mr-1" />
+              Password
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={logout}
+              className="text-xs cursor-pointer h-8"
+            >
+              <LogOut className="h-3.5 w-3.5 mr-1" />
+              Logout
             </Button>
           </div>
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-6xl w-full mx-auto p-6 md:p-8 space-y-6">
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-6xl w-full mx-auto p-6 md:p-8">
         {children}
       </main>
+
+      <footer className="border-t py-6 text-center text-xs text-muted-foreground">
+        Brightloop Software &bull; Subscription & Recurring Billing Platform
+      </footer>
     </div>
   );
 }
-

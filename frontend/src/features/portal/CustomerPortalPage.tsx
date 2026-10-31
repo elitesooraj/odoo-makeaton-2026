@@ -13,10 +13,12 @@ import {
   Building2,
   Mail,
   KeyRound,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { portalApi } from '@/api/portal';
 import { subscriptionsApi } from '@/api/subscriptions';
-import { Subscription } from '@/api/types';
+import { Invoice, Payment, PortalMe, Subscription } from '@/api/types';
 import { formatCents } from '@/lib/money';
 import { formatDate } from '@/lib/date';
 import { Button } from '@/components/ui/button';
@@ -36,77 +38,73 @@ export function CustomerPortalPage({ activeTab }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
 
+  const [portalMe, setPortalMe] = React.useState<PortalMe | null>(null);
   const [subscriptions, setSubscriptions] = React.useState<Subscription[]>([]);
+  const [invoices, setInvoices] = React.useState<Invoice[]>([]);
+  const [payments, setPayments] = React.useState<Payment[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [selectedSub, setSelectedSub] = React.useState<Subscription | null>(null);
   const [isDetailOpen, setIsDetailOpen] = React.useState(false);
 
-  // Mock client invoices
-  const [invoices] = React.useState([
-    {
-      id: 'inv-001',
-      number: 'INV-2026-0042',
-      period: 'Mar 1, 2026 – Mar 31, 2026',
-      amount_cents: 189200,
-      status: 'PAID',
-      due_date: '2026-03-31T00:00:00Z',
-    },
-    {
-      id: 'inv-002',
-      number: 'INV-2026-0089',
-      period: 'Apr 1, 2026 – Apr 30, 2026',
-      amount_cents: 189200,
-      status: 'CONFIRMED',
-      due_date: '2026-04-30T00:00:00Z',
-    },
-  ]);
-
-  const fetchSubscriptions = React.useCallback(async () => {
+  const fetchData = React.useCallback(async () => {
     setLoading(true);
     try {
-      // In customer portal, the query is scoped to this user's customer_id
-      const res = await subscriptionsApi.list({
-        customer_id: user?.customer_id || undefined,
-      });
-      setSubscriptions(res.data || []);
+      const [meRes, subsRes, invRes, payRes] = await Promise.all([
+        portalApi.getMe(),
+        portalApi.listSubscriptions(),
+        portalApi.listInvoices(),
+        portalApi.listPayments(),
+      ]);
+      setPortalMe(meRes);
+      setSubscriptions(subsRes || []);
+      setInvoices(invRes || []);
+      setPayments(payRes || []);
     } catch {
       toast({
         title: 'Error',
-        description: 'Failed to retrieve your subscriptions',
+        description: 'Failed to retrieve portal information',
         variant: 'destructive',
       });
     } finally {
       setLoading(false);
     }
-  }, [user?.customer_id, toast]);
+  }, [toast]);
 
   React.useEffect(() => {
-    fetchSubscriptions();
-  }, [fetchSubscriptions]);
+    fetchData();
+  }, [fetchData]);
 
-  const handleSelfServicePause = async (sub: Subscription) => {
+  const handleSelfServiceTogglePause = async (sub: Subscription) => {
     try {
-      const nextStatus = sub.status === 'PAUSED' ? 'ACTIVE' : 'PAUSED';
-      await subscriptionsApi.transition(sub.id, nextStatus);
-      toast({
-        title: nextStatus === 'ACTIVE' ? 'Subscription Resumed' : 'Subscription Paused',
-        description: `Your subscription billing has been updated.`,
-        variant: 'success',
-      });
-      fetchSubscriptions();
+      if (sub.status === 'PAUSED') {
+        await subscriptionsApi.resume(sub.id);
+        toast({
+          title: 'Subscription Resumed',
+          description: `Your subscription billing has been resumed.`,
+          variant: 'success',
+        });
+      } else {
+        await subscriptionsApi.pause(sub.id);
+        toast({
+          title: 'Subscription Paused',
+          description: `Your subscription is now paused.`,
+          variant: 'success',
+        });
+      }
+      fetchData();
     } catch {
       toast({
         title: 'Action Failed',
-        description: 'Could not change subscription status',
+        description: 'Plan terms do not permit customer pause, or backend returned an error.',
         variant: 'destructive',
       });
     }
   };
 
-  const handlePayInvoice = (invNumber: string) => {
+  const handlePayInvoice = (inv: Invoice) => {
     toast({
       title: 'Payment Simulated',
-      description: `Invoice ${invNumber} was processed through mock payment gateway.`,
+      description: `Payment for ${inv.number} (${formatCents(inv.balance_cents)}) processed through simulated gateway.`,
       variant: 'success',
     });
   };
@@ -118,7 +116,7 @@ export function CustomerPortalPage({ activeTab }: Props) {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Customer Portal</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Welcome, <strong>{user?.full_name || user?.email}</strong>. View and manage your Brightloop subscriptions and invoices.
+            Welcome, <strong>{portalMe?.full_name || user?.full_name || user?.email}</strong>. View and manage your Brightloop subscriptions and invoices.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -128,12 +126,54 @@ export function CustomerPortalPage({ activeTab }: Props) {
         </div>
       </div>
 
+      {/* KPI Highlights */}
+      {portalMe && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="border shadow-sm">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Active Subscriptions</CardDescription>
+              <CardTitle className="text-2xl font-bold font-mono text-emerald-400">
+                {portalMe.active_status} / {portalMe.subscriptions}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+
+          <Card className="border shadow-sm">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Pending Invoices</CardDescription>
+              <CardTitle className="text-2xl font-bold font-mono text-amber-400">
+                {portalMe.unpaid_invoices}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+
+          <Card className="border shadow-sm">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Total Invoices</CardDescription>
+              <CardTitle className="text-2xl font-bold font-mono text-foreground">
+                {portalMe.invoices}
+              </CardTitle>
+            </CardHeader>
+          </Card>
+
+          <Card className="border shadow-sm">
+            <CardHeader className="pb-2">
+              <CardDescription className="text-xs">Account Status</CardDescription>
+              <CardTitle className="text-xl font-bold text-emerald-400 flex items-center gap-1.5">
+                <CheckCircle2 className="h-5 w-5" />
+                Good Standing
+              </CardTitle>
+            </CardHeader>
+          </Card>
+        </div>
+      )}
+
       {/* Subscriptions Tab */}
       {activeTab === 'subscriptions' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold tracking-tight">My Active Subscriptions</h2>
-            <span className="text-xs text-muted-foreground">{subscriptions.length} active services</span>
+            <h2 className="text-lg font-bold tracking-tight">My Subscriptions</h2>
+            <span className="text-xs text-muted-foreground">{subscriptions.length} registered contract(s)</span>
           </div>
 
           <div className="grid md:grid-cols-2 gap-4">
@@ -149,7 +189,7 @@ export function CustomerPortalPage({ activeTab }: Props) {
                       <div>
                         <CardTitle className="text-base font-semibold">{sub.plan_name}</CardTitle>
                         <CardDescription className="font-mono text-xs text-muted-foreground">
-                          {sub.subscription_number}
+                          {sub.number || sub.subscription_number}
                         </CardDescription>
                       </div>
                       <Badge
@@ -170,7 +210,7 @@ export function CustomerPortalPage({ activeTab }: Props) {
                       <div>
                         <span className="text-muted-foreground">Recurring Charge:</span>
                         <div className="font-mono font-bold text-base text-emerald-400 mt-0.5">
-                          {formatCents(sub.total_cents)}
+                          {formatCents(sub.total_cents || sub.subtotal_cents || 0)}
                         </div>
                       </div>
                       <div>
@@ -182,14 +222,20 @@ export function CustomerPortalPage({ activeTab }: Props) {
                     <div className="space-y-1">
                       <span className="font-semibold text-muted-foreground">Included Items:</span>
                       <ul className="space-y-1 text-muted-foreground">
-                        {sub.lines.map((l) => (
-                          <li key={l.id} className="flex justify-between">
-                            <span>
-                              {l.quantity} &times; {l.product_name}
-                            </span>
-                            <span className="font-mono text-foreground">{formatCents(l.total_cents)}</span>
-                          </li>
-                        ))}
+                        {sub.lines && sub.lines.length > 0 ? (
+                          sub.lines.map((l) => (
+                            <li key={l.id} className="flex justify-between">
+                              <span>
+                                {l.quantity} &times; {l.product_name || l.description}
+                              </span>
+                              <span className="font-mono text-foreground">
+                                {formatCents(l.total_cents || l.quantity * l.unit_price_cents)}
+                              </span>
+                            </li>
+                          ))
+                        ) : (
+                          <li className="text-muted-foreground">Standard plan configuration</li>
+                        )}
                       </ul>
                     </div>
 
@@ -203,16 +249,16 @@ export function CustomerPortalPage({ activeTab }: Props) {
                           setIsDetailOpen(true);
                         }}
                       >
+                        <FileText className="h-3.5 w-3.5 mr-1" />
                         Details
                       </Button>
 
-                      {/* Self-service pause/resume toggle */}
                       {sub.status === 'ACTIVE' && (
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="text-xs h-8 text-purple-400 hover:text-purple-300 cursor-pointer"
-                          onClick={() => handleSelfServicePause(sub)}
+                          variant="outline"
+                          onClick={() => handleSelfServiceTogglePause(sub)}
+                          className="text-xs h-8 cursor-pointer border-amber-500/40 text-amber-400 hover:bg-amber-500/10"
                         >
                           <PauseCircle className="h-3.5 w-3.5 mr-1" />
                           Pause Subscription
@@ -222,9 +268,8 @@ export function CustomerPortalPage({ activeTab }: Props) {
                       {sub.status === 'PAUSED' && (
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="text-xs h-8 text-emerald-400 hover:text-emerald-300 cursor-pointer"
-                          onClick={() => handleSelfServicePause(sub)}
+                          onClick={() => handleSelfServiceTogglePause(sub)}
+                          className="text-xs h-8 cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white"
                         >
                           <PlayCircle className="h-3.5 w-3.5 mr-1" />
                           Resume Subscription
@@ -241,169 +286,243 @@ export function CustomerPortalPage({ activeTab }: Props) {
 
       {/* Invoices Tab */}
       {activeTab === 'invoices' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Invoices & Recurring Statements</CardTitle>
-            <CardDescription>
-              Review your monthly statements and process open balances.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Invoice #</TableHead>
-                  <TableHead>Billing Cycle</TableHead>
-                  <TableHead>Due Date</TableHead>
-                  <TableHead>Amount Due</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.map((inv) => (
-                  <TableRow key={inv.id}>
-                    <TableCell className="font-mono font-medium">{inv.number}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{inv.period}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{formatDate(inv.due_date)}</TableCell>
-                    <TableCell className="font-mono font-semibold text-emerald-400">
-                      {formatCents(inv.amount_cents)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={inv.status === 'PAID' ? 'success' : 'warning'}>
-                        {inv.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {inv.status !== 'PAID' ? (
-                        <Button
-                          size="sm"
-                          className="h-8 text-xs cursor-pointer"
-                          onClick={() => handlePayInvoice(inv.number)}
-                        >
-                          <CreditCard className="h-3.5 w-3.5 mr-1" /> Pay Now
-                        </Button>
-                      ) : (
-                        <span className="text-xs text-emerald-400 font-medium">Settled</span>
-                      )}
-                    </TableCell>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold tracking-tight">Billing History & Invoices</h2>
+            <span className="text-xs text-muted-foreground">{invoices.length} billing document(s)</span>
+          </div>
+
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Invoice #</TableHead>
+                    <TableHead>Issue Date</TableHead>
+                    <TableHead>Due Date</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right">Balance Due</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Payment</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Security Tab */}
-      {activeTab === 'security' && (
-        <div className="grid md:grid-cols-2 gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Registered Company Profile</CardTitle>
-              <CardDescription>Client account details and linked contact info</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-xs">
-              <div className="p-3 rounded-lg bg-muted/40 border space-y-1">
-                <span className="text-muted-foreground">Contact Email</span>
-                <div className="font-medium font-mono">{user?.email}</div>
-              </div>
-              <div className="p-3 rounded-lg bg-muted/40 border space-y-1">
-                <span className="text-muted-foreground">Full Name</span>
-                <div className="font-medium">{user?.full_name || 'Not configured'}</div>
-              </div>
-              <div className="p-3 rounded-lg bg-muted/40 border space-y-1">
-                <span className="text-muted-foreground">Account Role</span>
-                <Badge variant="outline" className="font-mono text-[10px]">
-                  {user?.role} (Customer Portal Access)
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Password & Credentials</CardTitle>
-              <CardDescription>Update your portal access credentials</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-xs">
-              <p className="text-muted-foreground leading-relaxed">
-                Brightloop requires passwords with at least 9 characters, uppercase, lowercase, and special characters.
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="cursor-pointer"
-                onClick={() => {
-                  toast({
-                    title: 'Use Top Header',
-                    description: 'Click the Password button in the top navigation bar to change your password.',
-                    variant: 'info',
-                  });
-                }}
-              >
-                <KeyRound className="h-3.5 w-3.5 mr-1" /> Change Password
-              </Button>
+                </TableHeader>
+                <TableBody>
+                  {invoices.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                        No invoices issued to this account yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    invoices.map((inv) => (
+                      <TableRow key={inv.id}>
+                        <TableCell className="font-mono font-semibold text-sm">{inv.number}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDate(inv.issue_date)}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDate(inv.due_date)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-medium text-sm">
+                          {formatCents(inv.total_cents)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-bold text-sm">
+                          {inv.balance_cents > 0 ? (
+                            <span className="text-red-400">{formatCents(inv.balance_cents)}</span>
+                          ) : (
+                            <span className="text-emerald-400">$0.00</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={inv.status === 'PAID' ? 'success' : 'warning'}>
+                            {inv.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {inv.status === 'CONFIRMED' && inv.balance_cents > 0 ? (
+                            <Button
+                              size="sm"
+                              onClick={() => handlePayInvoice(inv)}
+                              className="text-xs h-7 cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white"
+                            >
+                              <CreditCard className="h-3.5 w-3.5 mr-1" />
+                              Pay Now
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="ghost" className="text-xs h-7" disabled>
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1 text-emerald-400" />
+                              Settled
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Subscription Breakdown Modal */}
-      <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        {selectedSub && (
-          <div className="space-y-4">
-            <DialogHeader>
-              <DialogTitle>{selectedSub.plan_name}</DialogTitle>
-              <DialogDescription>
-                Reference: <code className="text-xs">{selectedSub.subscription_number}</code>
-              </DialogDescription>
-            </DialogHeader>
+      {/* Payments History Tab */}
+      {activeTab === 'payments' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold tracking-tight">Payment Receipts</h2>
+            <span className="text-xs text-muted-foreground">{payments.length} settled receipt(s)</span>
+          </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Payment Reference</TableHead>
+                    <TableHead>Invoice #</TableHead>
+                    <TableHead>Method</TableHead>
+                    <TableHead>Date Settled</TableHead>
+                    <TableHead className="text-right">Amount Paid</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {payments.length === 0 ? (
                     <TableRow>
-                      <TableHead>Service / Feature</TableHead>
-                      <TableHead className="text-center">Qty</TableHead>
-                      <TableHead className="text-right">Total</TableHead>
+                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                        No payments recorded for this account.
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {selectedSub.lines.map((l) => (
-                      <TableRow key={l.id}>
-                        <TableCell>
-                          <div className="font-semibold">{l.product_name}</div>
-                          {l.variant_name && <div className="text-primary">{l.variant_name}</div>}
+                  ) : (
+                    payments.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="font-mono text-xs">{p.id}</TableCell>
+                        <TableCell className="font-mono font-semibold text-sm">
+                          {p.invoice_number || 'INV-2026-XXXX'}
                         </TableCell>
-                        <TableCell className="text-center font-mono">{l.quantity}</TableCell>
-                        <TableCell className="text-right font-mono text-emerald-400">
-                          {formatCents(l.total_cents)}
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {p.method}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {new Date(p.paid_at).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-bold text-emerald-400 text-sm">
+                          {formatCents(p.amount_cents)}
                         </TableCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Account Profile Tab */}
+      {activeTab === 'profile' && (
+        <Card className="border">
+          <CardHeader>
+            <CardTitle>Organization & Billing Profile</CardTitle>
+            <CardDescription>
+              Your contact details registered with Brightloop Software.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="p-4 rounded-xl border bg-muted/30 space-y-2">
+                <span className="text-xs font-semibold uppercase text-muted-foreground flex items-center gap-1.5">
+                  <Building2 className="h-4 w-4" />
+                  Account Identity
+                </span>
+                <div className="font-bold text-base">{portalMe?.full_name || user?.full_name}</div>
+                <div className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Mail className="h-3.5 w-3.5" />
+                  {portalMe?.email || user?.email}
+                </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-muted/40 border flex justify-between items-center">
-                <span className="font-semibold text-muted-foreground">Total Recurring Charge:</span>
-                <span className="font-mono font-bold text-emerald-400 text-sm">
-                  {formatCents(selectedSub.total_cents)}
+              <div className="p-4 rounded-xl border bg-muted/30 space-y-2">
+                <span className="text-xs font-semibold uppercase text-muted-foreground flex items-center gap-1.5">
+                  <Shield className="h-4 w-4" />
+                  Security & Access
                 </span>
+                <div className="text-xs text-muted-foreground">
+                  Role: <Badge variant="secondary" className="ml-1">CUSTOMER</Badge>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Session Type: Secure SameSite=Lax Cookie
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Subscription Detail Dialog */}
+      <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
+        <DialogHeader>
+          <DialogTitle className="font-mono text-lg">
+            {selectedSub?.number || selectedSub?.subscription_number}
+          </DialogTitle>
+          <DialogDescription>
+            Active line items and current recurring schedule.
+          </DialogDescription>
+        </DialogHeader>
+
+        {selectedSub && (
+          <div className="space-y-4 text-xs">
+            <div className="p-3 rounded-lg border bg-muted/30 grid grid-cols-2 gap-2">
+              <div>
+                <span className="text-muted-foreground">Plan:</span>
+                <div className="font-semibold text-sm mt-0.5">{selectedSub.plan_name}</div>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Next Billing Date:</span>
+                <div className="font-semibold text-sm mt-0.5 font-mono text-emerald-400">
+                  {selectedSub.next_billing_date ? formatDate(selectedSub.next_billing_date) : 'Ongoing'}
+                </div>
               </div>
             </div>
 
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
-                Close
-              </Button>
-            </DialogFooter>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Line Description</TableHead>
+                  <TableHead className="text-center">Qty</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {selectedSub.lines && selectedSub.lines.length > 0 ? (
+                  selectedSub.lines.map((l) => (
+                    <TableRow key={l.id}>
+                      <TableCell className="font-medium">{l.product_name || l.description}</TableCell>
+                      <TableCell className="text-center font-mono">{l.quantity}</TableCell>
+                      <TableCell className="text-right font-mono font-bold text-emerald-400">
+                        {formatCents(l.total_cents || l.quantity * l.unit_price_cents)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center py-2 text-muted-foreground">
+                      Standard package lines
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
           </div>
         )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
+            Close
+          </Button>
+        </DialogFooter>
       </Dialog>
     </div>
   );
 }
-

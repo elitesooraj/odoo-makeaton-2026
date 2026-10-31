@@ -39,6 +39,8 @@ type Config struct {
 	FinancePassword    string
 	Currency           string
 	CompanyTimezone    string
+	BillingEnabled     bool
+	BillingInterval    time.Duration
 	LogLevel           slog.Level
 }
 
@@ -60,6 +62,11 @@ func Load() (Config, error) {
 	logLevel, err := parseLevel(getenv("LOG_LEVEL", "info"))
 	if err != nil {
 		return Config{}, err
+	}
+
+	billingInterval, err := time.ParseDuration(getenv("BILLING_INTERVAL", "1h"))
+	if err != nil {
+		return Config{}, fmt.Errorf("BILLING_INTERVAL must be a duration such as 1h: %w", err)
 	}
 
 	cfg := Config{
@@ -84,6 +91,8 @@ func Load() (Config, error) {
 		FinancePassword: os.Getenv("FINANCE_PASSWORD"),
 		Currency:        getenv("CURRENCY", "USD"),
 		CompanyTimezone: getenv("COMPANY_TIMEZONE", "UTC"),
+		BillingEnabled:  getenvBool("BILLING_ENABLED", false),
+		BillingInterval: billingInterval,
 		LogLevel:        logLevel,
 	}
 
