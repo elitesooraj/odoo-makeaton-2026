@@ -27,6 +27,14 @@ const columns = `id, number, customer_id, plan_id, status, start_date, expiry_da
 const lineColumns = `id, subscription_id, product_id, variant_id, description,
 	quantity, unit_price_cents, tax_id, position`
 
+// billingColumns is the SELECT list for ListForBilling: subscription columns
+// plus the plan columns the billing worker needs, in one JOIN.
+const billingColumns = `s.id, s.number, s.customer_id, s.plan_id, s.status, s.start_date, s.expiry_date,
+	s.payment_terms_days, s.quantity, s.discount_id, s.next_billing_date, s.quote_expires_at,
+	s.notes, s.created_by, s.activated_at, s.paused_at, s.closed_at, s.created_at, s.updated_at,
+	p.id, p.product_id, p.tax_id, p.name, p.interval, p.price_cents, p.minimum_quantity,
+	p.auto_close, p.auto_renew, p.allow_pause, p.allow_early_close, p.is_active`
+
 func (r *Repository) Insert(ctx context.Context, q db.Querier, s *Subscription) error {
 	_, err := q.Exec(ctx, `INSERT INTO subscriptions
 		(id, number, customer_id, plan_id, status, start_date, expiry_date,
@@ -77,14 +85,17 @@ func (r *Repository) List(ctx context.Context, f Filter) ([]Subscription, int, e
 // ListForBilling returns ACTIVE subscriptions with next_billing_date due on or
 // before `due`. Used by the billing worker.
 func (r *Repository) ListForBilling(ctx context.Context, due time.Time, page pagination.Page) ([]Subscription, int, error) {
-	const where = `WHERE status = 'ACTIVE' AND next_billing_date <= $1`
+	const where = `WHERE s.status = 'ACTIVE' AND s.next_billing_date <= $1`
 
 	var total int
-	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions `+where, id.DateArg(&due)).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions s `+where, id.DateArg(&due)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := r.pool.Query(ctx, `SELECT `+columns+` FROM subscriptions `+where+`
-		ORDER BY next_billing_date, id LIMIT $2 OFFSET $3`,
+	// JOIN plans so the billing worker gets plan flags in one query instead
+	// of a separate PlanFlagsByID round-trip per subscription (N+1).
+	rows, err := r.pool.Query(ctx, `SELECT `+billingColumns+` FROM subscriptions s
+		LEFT JOIN plans p ON p.id = s.plan_id `+where+`
+		ORDER BY s.next_billing_date, s.id LIMIT $2 OFFSET $3`,
 		id.DateArg(&due), page.PerPage, page.Offset())
 	if err != nil {
 		return nil, 0, err
@@ -93,7 +104,7 @@ func (r *Repository) ListForBilling(ctx context.Context, due time.Time, page pag
 
 	out := make([]Subscription, 0)
 	for rows.Next() {
-		s, err := scan(rows)
+		s, err := scanForBilling(rows)
 		if err != nil {
 			return nil, 0, err
 		}

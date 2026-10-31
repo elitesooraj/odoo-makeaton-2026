@@ -147,22 +147,30 @@ func (s *Service) Run(ctx context.Context, actor *auth.Actor, meta audit.Meta) (
 func (s *Service) billOne(ctx context.Context, actor *auth.Actor, meta audit.Meta, sub *subscriptions.Subscription, now time.Time) RunResult {
 	base := RunResult{SubscriptionID: sub.ID.String()}
 
+	// Plan flags come from the JOIN in ListForBilling; keep them across the
+	// re-fetch below, which only exists to load the subscription's lines.
+	planFlags := sub.Plan
+	if planFlags == nil {
+		loaded, err := s.subs.Repo().PlanFlagsByID(ctx, s.pool, sub.PlanID)
+		if err != nil {
+			return fail(base, err)
+		}
+		planFlags = loaded
+	}
+	if planFlags == nil {
+		return fail(base, errors.New("plan missing"))
+	}
+	flags := planFlags
+
 	// The billing listing does not load lines; re-fetch with lines so the
 	// invoice snapshot has items to copy.
 	fullSub, err := s.subs.Get(ctx, sub.ID)
 	if err != nil {
 		return fail(base, err)
 	}
+	fullSub.Plan = planFlags
 	sub = fullSub
 
-	// Need the plan interval and renewal flags.
-	flags, err := s.subs.Repo().PlanFlagsByID(ctx, s.pool, sub.PlanID)
-	if err != nil {
-		return fail(base, err)
-	}
-	if flags == nil {
-		return fail(base, errors.New("plan missing"))
-	}
 	if sub.NextBillingDate == nil {
 		return fail(base, errors.New("next_billing_date is not set"))
 	}

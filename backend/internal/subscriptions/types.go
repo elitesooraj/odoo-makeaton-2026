@@ -79,8 +79,11 @@ type Subscription struct {
 	PausedAt         *time.Time `json:"paused_at"`
 	ClosedAt         *time.Time `json:"closed_at"`
 	Lines            []Line     `json:"lines,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// Plan is populated by ListForBilling (JOIN) so the billing worker does
+	// not need a separate PlanFlagsByID round-trip per subscription.
+	Plan      *PlanSpec `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Line struct {

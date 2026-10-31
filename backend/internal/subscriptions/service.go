@@ -719,6 +719,106 @@ func scan(row pgx.Row) (*Subscription, error) {
 	return &s, nil
 }
 
+// scanForBilling scans a row from ListForBilling: subscription columns followed
+// by plan columns. It populates sub.Plan so the billing worker avoids a
+// separate PlanFlagsByID round-trip.
+func scanForBilling(row pgx.Row) (*Subscription, error) {
+	var (
+		s           Subscription
+		startDate   pgtype.Date
+		expiryDate  pgtype.Date
+		discountID  pgtype.UUID
+		nextBilling pgtype.Date
+		createdBy   pgtype.UUID
+		activatedAt pgtype.Timestamptz
+		pausedAt    pgtype.Timestamptz
+		closedAt    pgtype.Timestamptz
+		notes       pgtype.Text
+		// plan columns
+		planID     pgtype.UUID
+		productID  pgtype.UUID
+		taxID      pgtype.UUID
+		planName   pgtype.Text
+		interval   pgtype.Text
+		priceCents int64
+		minQty     int
+		autoClose  bool
+		autoRenew  bool
+		allowPause bool
+		allowEarly bool
+		isActive   bool
+	)
+	err := row.Scan(&s.ID, &s.Number, &s.CustomerID, &s.PlanID, &s.Status, &startDate,
+		&expiryDate, &s.PaymentTermsDays, &s.Quantity, &discountID, &nextBilling,
+		&s.QuoteExpiresAt, &notes, &createdBy, &activatedAt, &pausedAt, &closedAt,
+		&s.CreatedAt, &s.UpdatedAt,
+		&planID, &productID, &taxID, &planName, &interval, &priceCents, &minQty,
+		&autoClose, &autoRenew, &allowPause, &allowEarly, &isActive)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if startDate.Valid {
+		s.StartDate = startDate.Time
+	}
+	if expiryDate.Valid {
+		t := expiryDate.Time
+		s.ExpiryDate = &t
+	}
+	if discountID.Valid {
+		v := uuid.UUID(discountID.Bytes)
+		s.DiscountID = &v
+	}
+	if nextBilling.Valid {
+		t := nextBilling.Time
+		s.NextBillingDate = &t
+	}
+	if createdBy.Valid {
+		v := uuid.UUID(createdBy.Bytes)
+		s.CreatedBy = &v
+	}
+	if activatedAt.Valid {
+		t := activatedAt.Time
+		s.ActivatedAt = &t
+	}
+	if pausedAt.Valid {
+		t := pausedAt.Time
+		s.PausedAt = &t
+	}
+	if closedAt.Valid {
+		t := closedAt.Time
+		s.ClosedAt = &t
+	}
+	if notes.Valid {
+		v := notes.String
+		s.Notes = &v
+	}
+	// Populate plan flags when the join matched.
+	if planID.Valid {
+		pid := uuid.UUID(planID.Bytes)
+		spec := &PlanSpec{
+			ID:              pid,
+			ProductID:       uuid.UUID(productID.Bytes),
+			Name:            planName.String,
+			Interval:        interval.String,
+			PriceCents:      priceCents,
+			MinimumQuantity: minQty,
+			AutoClose:       autoClose,
+			AutoRenew:       autoRenew,
+			AllowPause:      allowPause,
+			AllowEarlyClose: allowEarly,
+			IsActive:        isActive,
+		}
+		if taxID.Valid {
+			v := uuid.UUID(taxID.Bytes)
+			spec.TaxID = &v
+		}
+		s.Plan = spec
+	}
+	return &s, nil
+}
 func scanLine(row pgx.Row) (*Line, error) {
 	var (
 		l           Line
