@@ -15,9 +15,10 @@ func TestStatusValid(t *testing.T) {
 		{"quotation", StatusQuotation, true},
 		{"confirmed", StatusConfirmed, true},
 		{"active", StatusActive, true},
+		{"paused", StatusPaused, true},
 		{"closed", StatusClosed, true},
 		{"empty", Status(""), false},
-		{"unknown", Status("PAUSED"), false},
+		{"unknown", Status("SUSPENDED"), false},
 		{"lowercase", Status("draft"), false},
 	}
 
@@ -38,6 +39,8 @@ func TestValidateTransitionAllowed(t *testing.T) {
 		{StatusDraft, StatusQuotation},
 		{StatusQuotation, StatusConfirmed},
 		{StatusConfirmed, StatusActive},
+		{StatusActive, StatusPaused},
+		{StatusPaused, StatusActive},
 		{StatusActive, StatusClosed},
 	}
 
@@ -67,6 +70,13 @@ func TestValidateTransitionRejected(t *testing.T) {
 		{"confirmed_to_quotation", StatusConfirmed, StatusQuotation},
 		{"active_to_draft", StatusActive, StatusDraft},
 		{"active_to_confirmed", StatusActive, StatusConfirmed},
+		{"draft_to_paused", StatusDraft, StatusPaused},
+		{"quotation_to_paused", StatusQuotation, StatusPaused},
+		{"confirmed_to_paused", StatusConfirmed, StatusPaused},
+		{"paused_to_draft", StatusPaused, StatusDraft},
+		{"paused_to_quotation", StatusPaused, StatusQuotation},
+		{"paused_to_confirmed", StatusPaused, StatusConfirmed},
+		{"paused_to_closed", StatusPaused, StatusClosed},
 		{"closed_to_active", StatusClosed, StatusActive},
 		{"closed_to_draft", StatusClosed, StatusDraft},
 		{"closed_to_closed", StatusClosed, StatusClosed},
@@ -99,6 +109,7 @@ func TestValidateTransitionRejectsSameStatus(t *testing.T) {
 		StatusQuotation,
 		StatusConfirmed,
 		StatusActive,
+		StatusPaused,
 		StatusClosed,
 	}
 
@@ -123,8 +134,8 @@ func TestValidateTransitionRejectsUnknownStatus(t *testing.T) {
 		from Status
 		to   Status
 	}{
-		{"unknown_current", Status("PAUSED"), StatusDraft},
-		{"unknown_requested", StatusDraft, Status("PAUSED")},
+		{"unknown_current", Status("SUSPENDED"), StatusDraft},
+		{"unknown_requested", StatusDraft, Status("SUSPENDED")},
 		{"empty_current", Status(""), StatusDraft},
 		{"empty_requested", StatusDraft, Status("")},
 		{"unknown_both", Status(""), Status("")},
@@ -145,5 +156,35 @@ func TestValidateTransitionRejectsUnknownStatus(t *testing.T) {
 				t.Fatalf("CanTransition(%q, %q) = true, want false", tt.from, tt.to)
 			}
 		})
+	}
+}
+
+func TestClosedIsTerminal(t *testing.T) {
+	statuses := []Status{
+		StatusDraft,
+		StatusQuotation,
+		StatusConfirmed,
+		StatusActive,
+		StatusPaused,
+		StatusClosed,
+	}
+
+	for _, to := range statuses {
+		t.Run("closed_to_"+string(to), func(t *testing.T) {
+			if CanTransition(StatusClosed, to) {
+				t.Fatalf("CanTransition(CLOSED, %q) = true, want false", to)
+			}
+		})
+	}
+}
+
+// PAUSED -> CLOSED is an unresolved business rule, so it stays rejected until
+// the policy is decided.
+func TestPausedToClosedRemainsRejected(t *testing.T) {
+	err := ValidateTransition(StatusPaused, StatusClosed)
+
+	var invalid *InvalidTransitionError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("ValidateTransition(PAUSED, CLOSED) = %v, want *InvalidTransitionError", err)
 	}
 }

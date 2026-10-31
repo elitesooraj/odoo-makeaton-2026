@@ -10,6 +10,7 @@ const (
 	StatusQuotation Status = "QUOTATION"
 	StatusConfirmed Status = "CONFIRMED"
 	StatusActive    Status = "ACTIVE"
+	StatusPaused    Status = "PAUSED"
 	StatusClosed    Status = "CLOSED"
 )
 
@@ -33,10 +34,10 @@ func (e *InvalidTransitionError) Error() string {
 	return fmt.Sprintf("invalid subscription status transition from %q to %q", e.From, e.To)
 }
 
-// Valid reports whether s is one of the five lifecycle statuses.
+// Valid reports whether s is one of the six lifecycle statuses.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusDraft, StatusQuotation, StatusConfirmed, StatusActive, StatusClosed:
+	case StatusDraft, StatusQuotation, StatusConfirmed, StatusActive, StatusPaused, StatusClosed:
 		return true
 	default:
 		return false
@@ -54,7 +55,9 @@ func CanTransition(from, to Status) bool {
 	case StatusConfirmed:
 		return to == StatusActive
 	case StatusActive:
-		return to == StatusClosed
+		return to == StatusPaused || to == StatusClosed
+	case StatusPaused:
+		return to == StatusActive
 	default:
 		return false
 	}
