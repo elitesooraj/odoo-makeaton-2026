@@ -70,7 +70,24 @@ curl -b cookies.txt http://localhost:8080/api/v1/auth/me
   backups and the hardening checklist.
 - [`docs/adr/`](docs/adr/) — architecture decisions.
 
-## What exists
+## Testing
+
+Two tiers, both run inside the Compose build image so the host needs only Docker:
+
+```bash
+make test              # Tier 1: go vet + unit tests. No database. Fast, always green.
+make test-integration  # Tier 2: spins a disposable postgres (tmpfs), runs migrations,
+                       # then the full HTTP flow tests (lifecycle, invoices, payments,
+                       # billing idempotency, quotations, portal scoping, reports).
+make test              # run after editing — Tier 1 stays green even offline
+```
+
+Tier 1 (`backend/internal/.../*_test.go`) locks the pure logic: money math,
+invoice arithmetic, subscription-line validation, and a route contract test
+that pins all 84 routes. Tier 2 (`backend/tests/integration/`) drives the real
+router over an `httptest.Server` with a real Postgres and a cookie jar, the same
+way Postman would. Integration tests self-skip when `TEST_DATABASE_URL` is
+unset, so `go test ./...` and `make test` keep working without a database.
 
 | Area | Status |
 | --- | --- |
