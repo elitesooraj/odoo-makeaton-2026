@@ -22,6 +22,7 @@ import (
 	"github.com/brightloop/subscription-platform/backend/internal/invoices"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/db"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/httpx"
+	"github.com/brightloop/subscription-platform/backend/internal/platform/id"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/money"
 	"github.com/brightloop/subscription-platform/backend/internal/platform/pagination"
 	"github.com/brightloop/subscription-platform/backend/internal/subscriptions"
@@ -64,23 +65,12 @@ func (r *BillingRuns) Record(ctx context.Context, q db.Querier, res RunResult, i
 		(id, subscription_id, period_start, period_end, invoice_id, status, error)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (subscription_id, period_start) DO NOTHING`,
-		id(), res.SubscriptionID, dateArg(res.PeriodStart), dateArg(res.PeriodEnd),
-		uuidPtrArg(invoiceID), statusOf(res), detail)
+		id.New(), res.SubscriptionID, res.PeriodStart, res.PeriodEnd,
+		invoiceID, statusOf(res), detail)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
-}
-
-func id() uuid.UUID { return uuid.Must(uuid.NewV7()) }
-
-func dateArg(t time.Time) any { return t }
-
-func uuidPtrArg(v *uuid.UUID) any {
-	if v == nil {
-		return nil
-	}
-	return *v
 }
 
 func statusOf(res RunResult) string {
@@ -123,12 +113,21 @@ func (s *Service) Run(ctx context.Context, actor *auth.Actor, meta audit.Meta) (
 	page := pagination.Page{Number: 1, PerPage: 100}
 	summary := &RunSummary{AsOf: due, Results: make([]RunResult, 0)}
 
-	subs, _, err := s.subs.Repo().ListForBilling(ctx, due, page)
-	if err != nil {
-		return nil, err
-	}
-	for i := range subs {
-		summary.Results = append(summary.Results, s.billOne(ctx, actor, meta, &subs[i], due))
+	for {
+		subs, _, err := s.subs.Repo().ListForBilling(ctx, due, page)
+		if err != nil {
+			return nil, err
+		}
+		if len(subs) == 0 {
+			break
+		}
+		for i := range subs {
+			summary.Results = append(summary.Results, s.billOne(ctx, actor, meta, &subs[i], due))
+		}
+		if len(subs) < page.PerPage {
+			break
+		}
+		page.Number++
 	}
 	for _, r := range summary.Results {
 		switch r.Status {
@@ -150,11 +149,11 @@ func (s *Service) billOne(ctx context.Context, actor *auth.Actor, meta audit.Met
 
 	// The billing listing does not load lines; re-fetch with lines so the
 	// invoice snapshot has items to copy.
-	full, err := s.subs.Get(ctx, sub.ID)
+	fullSub, err := s.subs.Get(ctx, sub.ID)
 	if err != nil {
 		return fail(base, err)
 	}
-	sub = full
+	sub = fullSub
 
 	// Need the plan interval and renewal flags.
 	flags, err := s.subs.Repo().PlanFlagsByID(ctx, s.pool, sub.PlanID)
@@ -192,25 +191,6 @@ func (s *Service) billOne(ctx context.Context, actor *auth.Actor, meta audit.Met
 	var invoiceID *uuid.UUID
 	var result RunResult
 	err = db.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
-		fresh, err := s.runs.Record(ctx, tx, RunResult{
-			SubscriptionID: sub.ID.String(),
-			PeriodStart:    periodStart,
-			PeriodEnd:      periodEnd,
-			Status:         "CREATED",
-		}, nil, "")
-		if err != nil {
-			return err
-		}
-		if !fresh {
-			result = RunResult{
-				SubscriptionID: sub.ID.String(),
-				PeriodStart:    periodStart,
-				PeriodEnd:      periodEnd,
-				Status:         "SKIPPED",
-				Detail:         "already billed",
-			}
-			return nil
-		}
 		inv, err := s.invoices.CreateForBilling(ctx, tx, actorID(actor), meta, sub, periodStart, periodEnd)
 		if err != nil {
 			return err
@@ -235,7 +215,7 @@ func (s *Service) billOne(ctx context.Context, actor *auth.Actor, meta audit.Met
 		} else {
 			next = periodEnd
 			if _, err := tx.Exec(ctx, `UPDATE subscriptions SET next_billing_date = $2 WHERE id = $1`,
-				sub.ID, dateArg(next)); err != nil {
+				sub.ID, next); err != nil {
 				return err
 			}
 			result = RunResult{
@@ -246,8 +226,8 @@ func (s *Service) billOne(ctx context.Context, actor *auth.Actor, meta audit.Met
 				Status:         "CREATED",
 			}
 		}
-		// Row already exists from the reserve step; the UPDATE below is a no-op
-		// because ON CONFLICT DO NOTHING matched it. Ignore the fresh result.
+		// Audit trail: record the run. ON CONFLICT DO NOTHING keeps this
+		// idempotent if a stale row exists from an earlier version.
 		_, _ = s.runs.Record(ctx, tx, result, invoiceID, result.Detail)
 		return nil
 	})
